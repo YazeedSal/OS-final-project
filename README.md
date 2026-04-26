@@ -27,7 +27,7 @@ This project simulates movement across a directed graph, where multiple "passeng
 | # | Topic | Status |
 |---|-------|--------|
 | 1 | Graph representation & algorithms |✅ Done|
-| 2 | Graphical interface — rendering the graph | ⏳ Pending |
+| 2 | Graphical interface — rendering the graph |✅ Done |
 | 3 | Movement animation on the graph | ⏳ Pending |
 | 4 | Multiple processes & parent process | ⏳ Pending |
 | 5 | Inter-process communication (IPC) | ⏳ Pending |
@@ -39,21 +39,21 @@ Each milestone is tagged in Git using the format `milestone1`, `milestone2`, etc
 ---
 
 ## File Structure
-
- 
 ```
 os-simulation-project/
 ├── src/                  # All .c source files
 │   ├── main.c            # Entry point
 │   ├── graph.c           # Graph data structures and algorithms
+│   ├── gui.c             # GUI's functions
 │   └── dijkstra.c        # Dijkstra's shortest path implementation
 ├── include/              # All .h header files
-│   └── graph.h 
-│   └── dijkstra.h        # Dijkstra function declarations
+│   ├── dijkstra.h        # Dijkstra function declarations
+│   ├── graph.h           # Graph functions and structure declartions
+│   └── gui.h             # GUI's functions declarations
 ├── tests/                # Input/output test cases
-│   ├── input1.txt
-│   └── expected1.txt
+│   └──  input1.txt
 ├── CMakeLists.txt        # CMake build configuration
+├── Makefile              # Build configuration
 ├── .gitignore
 └── README.md
 ```
