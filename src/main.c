@@ -1,18 +1,33 @@
 #include <stdio.h>
-#include "graph.h"
-#include "dijkstra.h"
+#include <stdlib.h>
 
-int main() {
+#include "../include/graph.h"
+#include "../include/gui.h"
+#include "../include/dijkstra.h"
+int main(int argc, char* argv[]) {
     Graph graph;
+    const char* filename;
 
-    if (readGraphFromFile("input.txt", &graph) == 0) {
-        printf("Error: could not read graph from file.\n");
+   
+    if (argc < 2) {
+        printf("Usage: %s <graph_file>\n", argv[0]);
+        printf("Example: %s tests/input1.txt\n", argv[0]);
         return 1;
     }
 
+    filename = argv[1];
+
+    if (!readGraphFromFile(filename, &graph)) {
+        /* readGraphFromFile already printed a descriptive error */
+        return 1;
+    }
+
+    printf("Graph loaded successfully.\n");
+    printGraph(&graph);
+    printf("\nLaunching GUI...\n");
+    
     dijkstra(&graph);
 
-    freeGraph(&graph);
+    draw_gui(&graph);
 
-    return 0;
-}
+  }

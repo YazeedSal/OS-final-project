@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
-#include "dijkstra.h"
+#include "../include/dijkstra.h"
 
 
 //Finding minimum distance node
@@ -31,7 +31,7 @@ static void printPath(int parent[], int v) {
 }
 
 
-//
+
 void dijkstra(const Graph* graph) {
     int n = graph->numNodes;
     int start = graph->source;
