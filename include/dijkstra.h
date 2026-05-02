@@ -5,4 +5,5 @@
 
 void dijkstra(const Graph* graph);
 int dijkstra_path(const Graph* graph, int* outPath, int* outLen);
+
 #endif

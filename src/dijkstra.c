@@ -115,12 +115,12 @@ int dijkstra_path(const Graph* graph, int* outPath, int* outLen)
 
     *outLen = 0;
 
-    if (!dist || !visited || !parent) {
+   if (!dist || !visited || !parent) {
         free(dist); free(visited); free(parent);
         return -1;
     }
 
-    for (int i = 0; i < n; i++) {
+   for (int i = 0; i < n; i++) {
         dist[i] = INT_MAX; visited[i] = 0; parent[i] = -1;
     }
     dist[start] = 0;
@@ -147,7 +147,7 @@ int dijkstra_path(const Graph* graph, int* outPath, int* outLen)
         return -1;
     }
 
-    /* reconstruct path backwards via parent[], then reverse into outPath */
+/* reconstruct path backwards via parent[], then reverse into outPath */
     int tmp[MAX_NODES];
     int len = 0;
     for (int v = end; v != -1; v = parent[v])
@@ -162,3 +162,4 @@ int dijkstra_path(const Graph* graph, int* outPath, int* outLen)
     free(dist); free(visited); free(parent);
     return cost;
 }
+

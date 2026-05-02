@@ -4,6 +4,7 @@
 #include "../include/graph.h"
 #include "../include/gui.h"
 #include "../include/dijkstra.h"
+
 int main(int argc, char* argv[]) {
     Graph graph;
     const char* filename;
