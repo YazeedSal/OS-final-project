@@ -1,7 +1,7 @@
 # OS Simulation Project — Directed Graph Traffic Simulation
 
 > **Course:** Operating Systems  
-> **Theme:** TBD *(e.g. train network, city map, communication network)*  
+> **Theme:** A bunch of modules with traces connecting them on a computer PCB 
 > **Language:** C | **Platform:** Linux | **Graphics:** raylib  
 
 ---
@@ -28,7 +28,7 @@ This project simulates movement across a directed graph, where multiple "passeng
 |---|-------|--------|
 | 1 | Graph representation & algorithms |✅ Done|
 | 2 | Graphical interface — rendering the graph |✅ Done |
-| 3 | Movement animation on the graph | ⏳ Pending |
+| 3 | Movement animation on the graph |✅ Done |
 | 4 | Multiple processes & parent process | ⏳ Pending |
 | 5 | Inter-process communication (IPC) | ⏳ Pending |
 | 6 | Synchronization | ⏳ Pending |
@@ -37,6 +37,20 @@ This project simulates movement across a directed graph, where multiple "passeng
 Each milestone is tagged in Git using the format `milestone1`, `milestone2`, etc.
 
 ---
+ 
+## Implementation Description
+ 
+### Milestone 1 — Dijkstra Shortest Path (CLI)
+Reads a directed weighted graph from a file into an adjacency list. Runs Dijkstra's algorithm from the source node and prints the shortest path and total cost to stdout.
+ 
+### Milestone 2 — Graph Visualiser (raylib GUI)
+Displays the graph in a raylib window styled as a PCB circuit board. Vertices are drawn as CPU chips, directed edges as PCB traces with arrowheads, and edge weights as yellow labels. Source and destination nodes are colour-highlighted.
+ 
+### Milestone 3 — Animation (Dijkstra Path Traversal)
+Extends milestone 2 with a moving packet that travels the shortest path. Each edge is crossed in W hops of 300ms (W = edge weight), with a 1-second pause at intermediate nodes. A Play/Stop button controls the animation and an arrival banner is shown at the destination.
+ 
+---
+
 
 ## File Structure
 ```
@@ -57,6 +71,34 @@ os-simulation-project/
 ├── .gitignore
 └── README.md
 ```
+---
 
-> More source files will be added as milestones progress (e.g. `simulation.c`, `ipc.c`, `sync.c`, `scheduler.c`).
+## Compilation & Run Commands
+ 
+### Milestone 1
+```bash
+make milestone1
+./dijkstra tests/<input_file>
+```
+ 
+### Milestone 2
+```bash
+make milestone2
+./sim tests/<input_file>
+```
+ 
+### Milestone 3
+```bash
+make milestone3
+./sim tests/<input_file>
+```
+ 
+### Clean
+```bash
+make clean
+```
+ 
+---
+
+
 
