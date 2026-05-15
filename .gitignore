@@ -1,2 +1,28 @@
-CMakeLists.txt
+# ── Build artifacts (CMake / Make) ─────────────
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+CMakeScripts/
+cmake_install.cmake
+Makefile.cmake
+install_manifest.txt
+*.o
+*.a
+*.so
+*.dSYM/
+
+# ── Executables produced by the Makefile ───────
+dijkstra
+sim
+OS_final_project
+a.out
+
+# ── macOS clutter ──────────────────────────────
 .DS_Store
+
+# ── IDE folders ────────────────────────────────
+.idea/
+.vscode/
+*.swp
+EOF
