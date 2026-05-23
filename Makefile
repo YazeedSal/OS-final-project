@@ -1,6 +1,6 @@
 CC      = gcc
 CFLAGS  = -Wall -Wextra -g
-LIBS    = -lraylib -lm
+LIBS    = -lraylib -lm -lX11
 
 SRC     = src
 INC     = include
@@ -17,9 +17,13 @@ M2_OUT  = sim
 M3_SRCS = $(SRC)/main.c $(SRC)/graph.c $(SRC)/dijkstra.c $(SRC)/gui.c
 M3_OUT  = sim
 
+
+# ─── Milestone 4: multi-process travelers ────────────────────────────────
+M4_SRCS = $(SRC)/main.c $(SRC)/graph.c $(SRC)/dijkstra.c $(SRC)/gui.c $(SRC)/travelers.c
+M4_OUT  = sim
 # ────────────────────────────────────────────────────────────────────────────
 
-.PHONY: milestone1 milestone2 milestone3 clean
+.PHONY: milestone1 milestone2 milestone3 milestone4 clean
 
 milestone1:
 	$(CC) $(CFLAGS) $(M1_SRCS) -I$(INC) -o $(M1_OUT) -lm
@@ -33,6 +37,10 @@ milestone3:
 	$(CC) $(CFLAGS) -DMILESTONE3 $(M3_SRCS) -I$(INC) -o $(M3_OUT) $(LIBS)
 	@echo "Built milestone 3 -> ./sim"
 
+milestone4:
+	$(CC) $(CFLAGS) -DMILESTONE4 $(M4_SRCS) -I$(INC) -o $(M4_OUT) $(LIBS)
+	@echo "Built milestone 4 -> ./sim"
 clean:
+
 	rm -f $(M1_OUT) $(M2_OUT)
 	@echo "Cleaned build artifacts"
