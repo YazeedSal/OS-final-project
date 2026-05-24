@@ -1,4 +1,5 @@
 #include "travelers.h"
+#include "dijkstra.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -63,4 +64,28 @@ void waitForTravelers(Traveler travelers[], int count) {
             waitpid(travelers[i].pid, NULL, 0);
         }
     }
+}
+
+
+int computeTravelerPaths(Graph *graph, Traveler travelers[], int count) {
+    for (int i = 0; i < count; i++) {
+        graph->source = travelers[i].source;
+        graph->destination = travelers[i].destination;
+
+        travelers[i].path = malloc(graph->numNodes * sizeof(int));
+
+        if (travelers[i].path == NULL) {
+            return 0;
+        }
+
+        if (!dijkstra_path(graph,
+                           travelers[i].path,
+                           &travelers[i].pathLength)) {
+            travelers[i].pathLength = 0;
+                           }
+
+        travelers[i].currentIndex = 0;
+    }
+
+    return 1;
 }

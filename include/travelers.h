@@ -3,6 +3,7 @@
 
 #include <sys/types.h>
 #include <stdio.h>
+#include <graph.h>
 typedef struct Traveler {
 
     int source;
@@ -28,5 +29,7 @@ void createTravelers(Traveler travelers[], int count);
 void killTravelers(Traveler travelers[], int count);
 
 void waitForTravelers(Traveler travelers[], int count);
+
+int computeTravelerPaths(Graph *graph, Traveler travelers[], int count);
 
 #endif
