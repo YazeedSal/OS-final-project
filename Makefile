@@ -1,6 +1,6 @@
 CC      = gcc
 CFLAGS  = -Wall -Wextra -g
-LIBS    = -lraylib -lm -lX11
+LIBS    = -lraylib -lm
 
 SRC     = src
 INC     = include
@@ -10,17 +10,18 @@ M1_SRCS = $(SRC)/main_m1.c $(SRC)/graph.c $(SRC)/dijkstra.c
 M1_OUT  = dijkstra
 
 # ─── Milestone 2: sim — static graph visualiser (no animation/dijkstra) ─────
-M2_SRCS = $(SRC)/main.c $(SRC)/graph.c $(SRC)/gui.c $(SRC)/dijkstra.c
+M2_SRCS = $(SRC)/main.c $(SRC)/graph.c $(SRC)/gui.c
 M2_OUT  = sim
 
 # ─── Milestone 3: sim — visualiser + Dijkstra animation ─────────────────────
 M3_SRCS = $(SRC)/main.c $(SRC)/graph.c $(SRC)/dijkstra.c $(SRC)/gui.c
 M3_OUT  = sim
 
-
-# ─── Milestone 4: multi-process travelers ────────────────────────────────
-M4_SRCS = $(SRC)/main.c $(SRC)/graph.c $(SRC)/dijkstra.c $(SRC)/gui.c $(SRC)/travelers.c
+# ─── Milestone 4: sim — multiple travelers with fork/wait ────────────────────
+M4_SRCS = $(SRC)/main.c $(SRC)/graph.c $(SRC)/dijkstra.c \
+           $(SRC)/travelers.c $(SRC)/gui_m4.c
 M4_OUT  = sim
+
 # ────────────────────────────────────────────────────────────────────────────
 
 .PHONY: milestone1 milestone2 milestone3 milestone4 clean
@@ -40,7 +41,7 @@ milestone3:
 milestone4:
 	$(CC) $(CFLAGS) -DMILESTONE4 $(M4_SRCS) -I$(INC) -o $(M4_OUT) $(LIBS)
 	@echo "Built milestone 4 -> ./sim"
-clean:
 
+clean:
 	rm -f $(M1_OUT) $(M2_OUT)
 	@echo "Cleaned build artifacts"
