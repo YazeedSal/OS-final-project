@@ -70,16 +70,23 @@ Pipes were chosen because they are simple, require no shared-memory setup, and m
 ```
 os-simulation-project/
 ├── src/                  # All .c source files
-│   ├── main.c            # Entry point
-│   ├── graph.c           # Graph data structures and algorithms
-│   ├── gui.c             # GUI's functions
-│   └── dijkstra.c        # Dijkstra's shortest path implementation
+│   ├── main.c            # Entry point (handles all milestones)
+│   ├── graph.c           # Graph data structures and file reading
+│   ├── dijkstra.c        # Dijkstra's shortest path implementation
+│   ├── gui.c             # GUI for milestones 4 & 5 (draw_gui_m4, draw_gui_m5)
+│   ├── gui_m23.c         # GUI for milestones 2 & 3
+│   ├── travelers.c       # Traveler struct, fork, kill, wait, path computation
+│   └── ipc.c             # Child travel logic with pipe-based IPC (milestone 5)
 ├── include/              # All .h header files
+│   ├── graph.h           # Graph struct and function declarations
 │   ├── dijkstra.h        # Dijkstra function declarations
-│   ├── graph.h           # Graph functions and structure declartions
-│   └── gui.h             # GUI's functions declarations
+│   ├── gui.h             # GUI function declarations (M4 & M5)
+│   ├── travelers.h       # Traveler struct and function declarations
+│   ├── ipc.h             # TravelMessage struct and child_travel declaration
+│   └── skip_comments.h   # Shared inline helper for skipping # comment lines
 ├── tests/                # Input/output test cases
-│   └──  input1.txt
+│   ├── input1.txt        # Sample input for milestones 1–3
+│   └── input_m5.txt      # Sample input for milestones 4–5
 ├── CMakeLists.txt        # CMake build configuration
 ├── Makefile              # Build configuration
 ├── .gitignore
@@ -136,6 +143,3 @@ make clean
 ```
  
 ---
-
-
-
