@@ -1,47 +1,39 @@
-CC      = gcc
-CFLAGS  = -Wall -Wextra -g
-LIBS    = -lraylib -lm
+CC     = gcc
+CFLAGS = -Wall -Wextra -g
+LIBS   = -lraylib -lm
+SRC    = src
+INC    = include
 
-SRC     = src
-INC     = include
-
-# ─── Milestone 1: dijkstra CLI (no GUI) ─────────────────────────────────────
-M1_SRCS = $(SRC)/main_m1.c $(SRC)/graph.c $(SRC)/dijkstra.c
-M1_OUT  = dijkstra
-
-# ─── Milestone 2: sim — static graph visualiser (no animation/dijkstra) ─────
-M2_SRCS = $(SRC)/main.c $(SRC)/graph.c $(SRC)/gui.c
-M2_OUT  = sim
-
-# ─── Milestone 3: sim — visualiser + Dijkstra animation ─────────────────────
-M3_SRCS = $(SRC)/main.c $(SRC)/graph.c $(SRC)/dijkstra.c $(SRC)/gui.c
-M3_OUT  = sim
-
-# ─── Milestone 4: sim — multiple travelers with fork/wait ────────────────────
-M4_SRCS = $(SRC)/main.c $(SRC)/graph.c $(SRC)/dijkstra.c \
-           $(SRC)/travelers.c $(SRC)/gui_m4.c
-M4_OUT  = sim
-
-# ────────────────────────────────────────────────────────────────────────────
-
-.PHONY: milestone1 milestone2 milestone3 milestone4 clean
+.PHONY: milestone1 milestone2 milestone3 milestone4 milestone5 clean
 
 milestone1:
-	$(CC) $(CFLAGS) $(M1_SRCS) -I$(INC) -o $(M1_OUT) -lm
+	$(CC) $(CFLAGS) $(SRC)/main_m1.c $(SRC)/graph.c $(SRC)/dijkstra.c \
+	    -I$(INC) -o dijkstra -lm
 	@echo "Built milestone 1 -> ./dijkstra"
 
 milestone2:
-	$(CC) $(CFLAGS) $(M2_SRCS) -I$(INC) -o $(M2_OUT) $(LIBS)
+	$(CC) $(CFLAGS) $(SRC)/main.c $(SRC)/graph.c $(SRC)/gui.c \
+	    -I$(INC) -o sim $(LIBS)
 	@echo "Built milestone 2 -> ./sim"
 
 milestone3:
-	$(CC) $(CFLAGS) -DMILESTONE3 $(M3_SRCS) -I$(INC) -o $(M3_OUT) $(LIBS)
+	$(CC) $(CFLAGS) -DMILESTONE3 $(SRC)/main.c $(SRC)/graph.c \
+	    $(SRC)/dijkstra.c $(SRC)/gui.c \
+	    -I$(INC) -o sim $(LIBS)
 	@echo "Built milestone 3 -> ./sim"
 
 milestone4:
-	$(CC) $(CFLAGS) -DMILESTONE4 $(M4_SRCS) -I$(INC) -o $(M4_OUT) $(LIBS)
+	$(CC) $(CFLAGS) -DMILESTONE4 $(SRC)/main.c $(SRC)/graph.c \
+	    $(SRC)/dijkstra.c $(SRC)/travelers.c $(SRC)/gui_m4.c \
+	    -I$(INC) -o sim $(LIBS)
 	@echo "Built milestone 4 -> ./sim"
 
+milestone5:
+	$(CC) $(CFLAGS) -DMILESTONE5 $(SRC)/main.c $(SRC)/graph.c \
+	    $(SRC)/dijkstra.c $(SRC)/travelers.c $(SRC)/ipc.c $(SRC)/gui_m4.c \
+	    -I$(INC) -o sim $(LIBS)
+	@echo "Built milestone 5 -> ./sim"
+
 clean:
-	rm -f $(M1_OUT) $(M2_OUT)
+	rm -f dijkstra sim
 	@echo "Cleaned build artifacts"

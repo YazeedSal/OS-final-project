@@ -1,11 +1,12 @@
 /*
- * gui_m4.c  —  Milestone 4: Multiple Travelers (PCB edition)
+ * gui.c — Milestones 4 & 5: Graph Visualiser (PCB edition)
  *
- * Clean rewrite — no #ifdef chains.
- * Compile via:  make milestone4
- *   gcc -Wall -Wextra -g \
- *       src/main.c src/graph.c src/dijkstra.c src/travelers.c src/gui_m4.c \
- *       -Iinclude -o sim -lraylib -lm
+ * Two public entry points:
+ *   draw_gui_m4()  — M4: path-driven animation, Play/Stop button
+ *   draw_gui_m5()  — M5: pipe-driven animation, Play/Stop pauses visuals only
+ *
+ * All drawing code is shared between both entry points.
+ * No #ifdefs, no legacy code.
  */
 
 #include <raylib.h>
@@ -13,28 +14,29 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/select.h>
+#include <unistd.h>
 
 #include "../include/graph.h"
 #include "../include/travelers.h"
+#include "../include/ipc.h"
 
 /* ═══════════════════════════════════════════════════════════════════
    CONSTANTS
    ═══════════════════════════════════════════════════════════════════ */
-#define WINDOW_W       1280
-#define WINDOW_H        800
-#define FPS              60
+#define WINDOW_W      1280
+#define WINDOW_H       800
+#define FPS             60
 
-/* chip geometry */
-#define CHIP_HALF        28
-#define LEG_COUNT         4
-#define LEG_LEN          11
-#define LEG_THICK         2
-#define LEG_SPACING       9
+#define CHIP_HALF       28
+#define LEG_COUNT        4
+#define LEG_LEN         11
+#define LEG_THICK        2
+#define LEG_SPACING      9
 
-/* animation timing */
-#define HOP_SEC          0.30f   /* seconds per hop (300 ms)   */
-#define NODE_WAIT_SEC    1.00f   /* seconds to wait at a node  */
-#define ENTITY_R         10.0f   /* packet circle radius       */
+#define HOP_SEC       0.30f
+#define NODE_WAIT_SEC 1.00f
+#define ENTITY_R      10.0f
 
 /* ═══════════════════════════════════════════════════════════════════
    COLOURS
@@ -60,7 +62,6 @@
 #define C_BTN_HBORD   CLITERAL(Color){ 80, 220, 100, 255 }
 #define C_BTN_TEXT    CLITERAL(Color){200, 255, 200, 255 }
 
-/* 15 distinct traveler colours, one per traveler */
 static const Color TCOLORS[MAX_TRAVELERS] = {
     {255, 220,  50, 255},  /* yellow      */
     {255,  80,  80, 255},  /* red         */
@@ -80,29 +81,28 @@ static const Color TCOLORS[MAX_TRAVELERS] = {
 };
 
 /* ═══════════════════════════════════════════════════════════════════
-   ANIMATION STATE  (one per traveler)
+   ANIMATION STATE
    ═══════════════════════════════════════════════════════════════════ */
 typedef enum { ANIM_IDLE, ANIM_MOVING, ANIM_WAITING, ANIM_DONE } AnimState;
 
 typedef struct {
     AnimState state;
-    int       segIdx;    /* current segment index in path             */
-    int       hopIdx;    /* current hop within the segment            */
-    int       hopTotal;  /* total hops for this segment (edge weight) */
-    float     timer;     /* time accumulator (seconds)                */
-    Vector2   pos;       /* current screen position of the packet     */
+    int       segIdx;
+    int       hopIdx;
+    int       hopTotal;
+    float     timer;
+    Vector2   pos;
 } TravAnim;
 
 /* ═══════════════════════════════════════════════════════════════════
-   LAYOUT — circular placement
+   LAYOUT
    ═══════════════════════════════════════════════════════════════════ */
 static Vector2 gPos[MAX_NODES];
 
 static void compute_layout(int n)
 {
-    float cx = WINDOW_W / 2.0f;
-    float cy  = WINDOW_H / 2.0f;
-    float r   = fminf(cx, cy) - CHIP_HALF - LEG_LEN - 60.0f;
+    float cx = WINDOW_W / 2.0f, cy = WINDOW_H / 2.0f;
+    float r  = fminf(cx, cy) - CHIP_HALF - LEG_LEN - 60.0f;
     if (n == 1) { gPos[0] = (Vector2){cx, cy}; return; }
     for (int i = 0; i < n; i++) {
         float a = (float)i / (float)n * 2.0f * PI - PI / 2.0f;
@@ -111,7 +111,7 @@ static void compute_layout(int n)
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   HELPER — edge weight lookup
+   HELPERS
    ═══════════════════════════════════════════════════════════════════ */
 static int edge_weight(const Graph* g, int u, int v)
 {
@@ -123,18 +123,27 @@ static int edge_weight(const Graph* g, int u, int v)
     return 1;
 }
 
+static int on_path(const Traveler* t, int u, int v)
+{
+    for (int i = 0; i < t->pathLength - 1; i++)
+        if (t->path[i] == u && t->path[i+1] == v) return 1;
+    return 0;
+}
+
+static int any_on_path(const Traveler* travelers, int count, int u, int v)
+{
+    for (int i = 0; i < count; i++)
+        if (on_path(&travelers[i], u, v)) return 1;
+    return 0;
+}
+
 /* ═══════════════════════════════════════════════════════════════════
-   ANIMATION — initialise one traveler's animation state
+   ANIMATION TICK  (M4 path-driven)
    ═══════════════════════════════════════════════════════════════════ */
 static void trav_anim_init(TravAnim* a, const Traveler* t, const Graph* g)
 {
     memset(a, 0, sizeof(TravAnim));
-
-    if (t->pathLength < 1) {
-        a->state = ANIM_DONE;
-        return;
-    }
-
+    if (t->pathLength < 1) { a->state = ANIM_DONE; return; }
     a->state    = ANIM_IDLE;
     a->segIdx   = 0;
     a->hopIdx   = 0;
@@ -144,9 +153,6 @@ static void trav_anim_init(TravAnim* a, const Traveler* t, const Graph* g)
     a->timer    = 0.0f;
 }
 
-/* ═══════════════════════════════════════════════════════════════════
-   ANIMATION — advance one traveler by dt seconds
-   ═══════════════════════════════════════════════════════════════════ */
 static void trav_anim_tick(TravAnim* a, const Traveler* t,
                            const Graph* g, float dt)
 {
@@ -166,7 +172,7 @@ static void trav_anim_tick(TravAnim* a, const Traveler* t,
         a->hopIdx   = 0;
         a->hopTotal = edge_weight(g, t->path[a->segIdx],
                                      t->path[a->segIdx + 1]);
-        a->state    = ANIM_MOVING;
+        a->state = ANIM_MOVING;
         return;
     }
 
@@ -175,27 +181,20 @@ static void trav_anim_tick(TravAnim* a, const Traveler* t,
     Vector2 to   = gPos[t->path[a->segIdx + 1]];
 
     if (a->timer >= HOP_SEC) {
-        /* completed one hop */
         a->timer = 0.0f;
         a->hopIdx++;
-
         if (a->hopIdx >= a->hopTotal) {
-            /* arrived at next node */
             a->pos = to;
-            int arrived = t->path[a->segIdx + 1];
-            int dest    = t->path[t->pathLength - 1];
-            if (arrived == dest) {
+            if (t->path[a->segIdx + 1] == t->path[t->pathLength - 1])
                 a->state = ANIM_DONE;
-            } else {
+            else
                 a->state = ANIM_WAITING;
-            }
         } else {
             float tf = (float)a->hopIdx / (float)a->hopTotal;
             a->pos = (Vector2){ from.x + (to.x - from.x) * tf,
                                 from.y + (to.y - from.y) * tf };
         }
     } else {
-        /* smooth interpolation within this hop */
         float t0 = (float)a->hopIdx       / (float)a->hopTotal;
         float t1 = (float)(a->hopIdx + 1) / (float)a->hopTotal;
         float tf = t0 + (t1 - t0) * (a->timer / HOP_SEC);
@@ -205,25 +204,7 @@ static void trav_anim_tick(TravAnim* a, const Traveler* t,
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   HELPER — is edge u->v on traveler t's path?
-   ═══════════════════════════════════════════════════════════════════ */
-static int on_path(const Traveler* t, int u, int v)
-{
-    for (int i = 0; i < t->pathLength - 1; i++)
-        if (t->path[i] == u && t->path[i + 1] == v) return 1;
-    return 0;
-}
-
-/* any traveler uses this edge? */
-static int any_on_path(const Traveler* travelers, int count, int u, int v)
-{
-    for (int i = 0; i < count; i++)
-        if (on_path(&travelers[i], u, v)) return 1;
-    return 0;
-}
-
-/* ═══════════════════════════════════════════════════════════════════
-   DRAW — PCB grid background
+   DRAW: background
    ═══════════════════════════════════════════════════════════════════ */
 static void draw_background(void)
 {
@@ -232,32 +213,30 @@ static void draw_background(void)
     for (int y = 0; y < WINDOW_H; y += 40)
         DrawLine(0, y, WINDOW_W, y, C_GRID);
 
-    /* corner fiducials */
     int p = 22;
     Color fid = CLITERAL(Color){28, 75, 38, 255};
-    int corners[4][2] = {{p,p},{WINDOW_W-p,p},{p,WINDOW_H-p},{WINDOW_W-p,WINDOW_H-p}};
+    int c[4][2] = {{p,p},{WINDOW_W-p,p},{p,WINDOW_H-p},{WINDOW_W-p,WINDOW_H-p}};
     for (int i = 0; i < 4; i++) {
-        DrawCircleLines(corners[i][0], corners[i][1], 9, fid);
-        DrawCircleLines(corners[i][0], corners[i][1], 4, fid);
+        DrawCircleLines(c[i][0], c[i][1], 9, fid);
+        DrawCircleLines(c[i][0], c[i][1], 4, fid);
     }
     DrawRectangleLines(8, 8, WINDOW_W-16, WINDOW_H-16,
                        CLITERAL(Color){24, 60, 30, 255});
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   DRAW — directed PCB trace with arrowhead
+   DRAW: arrow
    ═══════════════════════════════════════════════════════════════════ */
 static void draw_arrow(Vector2 p1, Vector2 p2, int highlighted)
 {
     float margin = CHIP_HALF + LEG_LEN + 3.0f;
     float head = 16.0f, wing = 7.0f;
-
-    float dx = p2.x - p1.x, dy = p2.y - p1.y;
+    float dx = p2.x-p1.x, dy = p2.y-p1.y;
     float len = sqrtf(dx*dx + dy*dy);
-    if (len < 2.0f * margin + head + 4.0f) return;
+    if (len < 2.0f*margin + head + 4.0f) return;
 
     float ux = dx/len, uy = dy/len;
-    float px = -uy,    py =  ux;    /* perpendicular, left side */
+    float px = -uy,    py =  ux;
 
     Vector2 a    = { p1.x + ux*margin, p1.y + uy*margin };
     Vector2 tip  = { p2.x - ux*margin, p2.y - uy*margin };
@@ -272,84 +251,70 @@ static void draw_arrow(Vector2 p1, Vector2 p2, int highlighted)
 
     DrawLineEx(a, base, thick, lo);
     DrawLineEx(a, base, thin,  hi);
-    /* CCW winding: tip → right-wing → left-wing */
-    DrawTriangle(tip, br, bl, hi);
+    DrawTriangle(tip, br, bl, hi);   /* CCW: tip → right → left */
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   DRAW — edge weight label
+   DRAW: weight label
    ═══════════════════════════════════════════════════════════════════ */
 static void draw_weight_label(Vector2 p1, Vector2 p2, int w, Font font)
 {
-    float dx = p2.x - p1.x, dy = p2.y - p1.y;
-    float len = sqrtf(dx*dx + dy*dy);
+    float dx = p2.x-p1.x, dy = p2.y-p1.y;
+    float len = sqrtf(dx*dx+dy*dy);
     float margin = CHIP_HALF + LEG_LEN + 3.0f;
-    if (len < 2.0f * margin + 12.0f) return;
+    if (len < 2.0f*margin + 12.0f) return;
 
-    /* perpendicular offset so label floats beside the trace */
     float px = -dy/len, py = dx/len;
-    Vector2 mid = {
-        p1.x + dx*0.70f + px*18.0f,
-        p1.y + dy*0.70f + py*18.0f
-    };
+    Vector2 mid = { p1.x + dx*0.70f + px*18.0f,
+                    p1.y + dy*0.70f + py*18.0f };
 
     char buf[16];
     snprintf(buf, sizeof(buf), "%d", w);
     int fs = 15;
-    Vector2 sz = MeasureTextEx(font, buf, fs, 1);
+    Vector2 sz  = MeasureTextEx(font, buf, fs, 1);
     Rectangle pill = { mid.x-sz.x/2-5, mid.y-sz.y/2-3, sz.x+10, sz.y+6 };
 
-    /* fully opaque black pill so label is always readable */
     DrawRectangleRounded(pill, 0.4f, 4, CLITERAL(Color){0,0,0,255});
     DrawRectangleRoundedLines(pill, 0.4f, 4, CLITERAL(Color){40,100,50,255});
     DrawTextEx(font, buf, (Vector2){mid.x-sz.x/2, mid.y-sz.y/2}, fs, 1, C_WEIGHT);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   DRAW — CPU chip
+   DRAW: CPU chip
    ═══════════════════════════════════════════════════════════════════ */
-static void draw_cpu(Vector2 p, int id, Color border_override,
+static void draw_cpu(Vector2 p, int id, Color border_col,
                      int use_override, Font font)
 {
     int h = CHIP_HALF;
 
-    /* legs */
     for (int side = 0; side < 4; side++) {
         for (int k = 0; k < LEG_COUNT; k++) {
             float off = (k - (LEG_COUNT-1)/2.0f) * LEG_SPACING;
             Vector2 s, e;
             switch (side) {
-                case 0: s=(Vector2){p.x+off,p.y-h};    e=(Vector2){p.x+off,p.y-h-LEG_LEN}; break;
-                case 1: s=(Vector2){p.x+off,p.y+h};    e=(Vector2){p.x+off,p.y+h+LEG_LEN}; break;
-                case 2: s=(Vector2){p.x-h,  p.y+off};  e=(Vector2){p.x-h-LEG_LEN,p.y+off}; break;
-                default:s=(Vector2){p.x+h,  p.y+off};  e=(Vector2){p.x+h+LEG_LEN,p.y+off}; break;
+                case 0: s=(Vector2){p.x+off,p.y-h};   e=(Vector2){p.x+off,p.y-h-LEG_LEN}; break;
+                case 1: s=(Vector2){p.x+off,p.y+h};   e=(Vector2){p.x+off,p.y+h+LEG_LEN}; break;
+                case 2: s=(Vector2){p.x-h,  p.y+off}; e=(Vector2){p.x-h-LEG_LEN,p.y+off}; break;
+                default:s=(Vector2){p.x+h,  p.y+off}; e=(Vector2){p.x+h+LEG_LEN,p.y+off}; break;
             }
             DrawLineEx(s, e, LEG_THICK, C_LEG);
             DrawCircleV(e, 2.5f, C_LEG);
         }
     }
 
-    /* shadow + body */
-    DrawRectangle((int)(p.x-h+4),(int)(p.y-h+4),h*2,h*2,
-                  CLITERAL(Color){0,25,5,140});
-    DrawRectangle((int)(p.x-h),(int)(p.y-h),h*2,h*2, C_CHIP_BODY);
+    DrawRectangle((int)(p.x-h+4),(int)(p.y-h+4),h*2,h*2,CLITERAL(Color){0,25,5,140});
+    DrawRectangle((int)(p.x-h),(int)(p.y-h),h*2,h*2,C_CHIP_BODY);
 
-    /* border — use override colour if supplied */
-    Color border = use_override ? border_override : C_CHIP_BORDER;
+    Color border = use_override ? border_col : C_CHIP_BORDER;
     float bt     = use_override ? 2.5f : 1.5f;
     DrawRectangleLinesEx(
         (Rectangle){(float)(p.x-h),(float)(p.y-h),(float)(h*2),(float)(h*2)},
         bt, border);
 
-    /* alignment notch */
     DrawCircle((int)p.x,(int)(p.y-h),5,C_NOTCH);
     DrawCircleLines((int)p.x,(int)(p.y-h),5,border);
+    DrawCircle((int)(p.x-h+7),(int)(p.y-h+7),3,CLITERAL(Color){55,175,75,255});
 
-    /* pin-1 dot */
-    DrawCircle((int)(p.x-h+7),(int)(p.y-h+7),3,
-               CLITERAL(Color){55,175,75,255});
-
-    /* inner circuit decoration */
     DrawLine((int)(p.x-h+10),(int)p.y,(int)(p.x+h-10),(int)p.y,C_CHIP_INNER);
     DrawLine((int)p.x,(int)(p.y-h+10),(int)p.x,(int)(p.y+h-10),C_CHIP_INNER);
     DrawCircle((int)(p.x-9),(int)(p.y-9),2,C_CHIP_INNER);
@@ -357,47 +322,40 @@ static void draw_cpu(Vector2 p, int id, Color border_override,
     DrawCircle((int)(p.x-9),(int)(p.y+9),2,C_CHIP_INNER);
     DrawCircle((int)(p.x+9),(int)(p.y-9),2,C_CHIP_INNER);
 
-    /* label */
     char buf[10];
     snprintf(buf, sizeof(buf), "CPU%d", id);
     int fs = 13;
     Vector2 sz = MeasureTextEx(font, buf, fs, 1);
-    DrawTextEx(font, buf,
-               (Vector2){p.x-sz.x/2, p.y-sz.y/2}, fs, 1, C_LABEL);
+    DrawTextEx(font, buf, (Vector2){p.x-sz.x/2, p.y-sz.y/2}, fs, 1, C_LABEL);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   DRAW — moving packet (glowing circle)
+   DRAW: packet
    ═══════════════════════════════════════════════════════════════════ */
 static void draw_packet(Vector2 pos, Color col)
 {
     Color glow = col; glow.a = 60;
-    DrawCircle((int)pos.x, (int)pos.y, (int)(ENTITY_R + 8), glow);
-    DrawCircle((int)pos.x, (int)pos.y, (int)ENTITY_R, col);
-    DrawCircle((int)pos.x, (int)pos.y, 4,
-               CLITERAL(Color){30, 15, 0, 255});
+    DrawCircle((int)pos.x,(int)pos.y,(int)(ENTITY_R+8),glow);
+    DrawCircle((int)pos.x,(int)pos.y,(int)ENTITY_R,col);
+    DrawCircle((int)pos.x,(int)pos.y,4,CLITERAL(Color){30,15,0,255});
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   DRAW — play / stop / restart button
-   Returns 1 if clicked this frame.
+   DRAW: Play/Stop/Restart button — returns 1 if clicked
    ═══════════════════════════════════════════════════════════════════ */
 static int draw_button(int playing, int all_done)
 {
-    Rectangle btn = { WINDOW_W - 130, WINDOW_H - 52, 110, 36 };
+    Rectangle btn = { WINDOW_W-130, WINDOW_H-52, 110, 36 };
     int hov     = CheckCollisionPointRec(GetMousePosition(), btn);
     int clicked = hov && IsMouseButtonPressed(MOUSE_LEFT_BUTTON);
 
-    DrawRectangleRounded(btn, 0.3f, 6,
-                         hov ? C_BTN_HOV    : C_BTN_IDLE);
-    DrawRectangleRoundedLines(btn, 0.3f, 6,
-                         hov ? C_BTN_HBORD  : C_BTN_BORDER);
+    DrawRectangleRounded(btn, 0.3f, 6, hov ? C_BTN_HOV   : C_BTN_IDLE);
+    DrawRectangleRoundedLines(btn, 0.3f, 6, hov ? C_BTN_HBORD : C_BTN_BORDER);
 
-    const char* label = all_done   ? "Restart"   :
-                        playing    ? "[ Stop ]"  : "[ Play ]";
+    const char* lbl = all_done ? "Restart" : playing ? "[ Stop ]" : "[ Play ]";
     int fs = 16;
-    Vector2 sz = MeasureTextEx(GetFontDefault(), label, fs, 1);
-    DrawText(label,
+    Vector2 sz = MeasureTextEx(GetFontDefault(), lbl, fs, 1);
+    DrawText(lbl,
              (int)(btn.x + (btn.width  - sz.x) / 2),
              (int)(btn.y + (btn.height - sz.y) / 2),
              fs, C_BTN_TEXT);
@@ -406,41 +364,150 @@ static int draw_button(int playing, int all_done)
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   PUBLIC ENTRY POINT
+   DRAW: shared HUD elements
    ═══════════════════════════════════════════════════════════════════ */
-void draw_gui(const Graph* g, Traveler* travelers, int numTravelers)
+static void draw_hud(const Graph* g, int numTravelers,
+                     int sources[], int dests[],
+                     int playing, int all_done,
+                     const char* title)
 {
-    if (!g || g->numNodes <= 0 || !travelers || numTravelers <= 0) return;
+    DrawText(title, 16, 14, 18, C_HUD);
+    char info[80];
+    snprintf(info, sizeof(info), "Nodes: %d   Edges: %d   Travelers: %d",
+             g->numNodes, g->numEdges, numTravelers);
+    DrawText(info, 16, 36, 14, C_HUD_DIM);
+
+    for (int i = 0; i < numTravelers; i++) {
+        Color col = TCOLORS[i % MAX_TRAVELERS];
+        int lx = WINDOW_W-210, ly = 14 + i*18;
+        DrawRectangle(lx, ly, 12, 12, col);
+        char lbl[32];
+        snprintf(lbl, sizeof(lbl), "T%d: CPU%d -> CPU%d", i, sources[i], dests[i]);
+        DrawText(lbl, lx+16, ly, 12, col);
+    }
+
+    const char* status = all_done ? "" : playing ? "Transmitting..." : "Paused — Press Play";
+    DrawText(status, 16, WINDOW_H-48, 14, C_HUD_DIM);
+    DrawText("[ESC] Quit", 16, WINDOW_H-24, 13, C_HUD_DIM);
+
+    if (all_done) {
+        int bw=420, bh=64, bx=(WINDOW_W-bw)/2, by=(WINDOW_H-bh)/2;
+        DrawRectangleRounded(
+            (Rectangle){(float)bx,(float)by,(float)bw,(float)bh},
+            0.2f, 8, CLITERAL(Color){0,0,0,220});
+        DrawRectangleRoundedLines(
+            (Rectangle){(float)bx,(float)by,(float)bw,(float)bh},
+            0.2f, 8, TCOLORS[0]);
+        const char* msg = "All travelers arrived!";
+        int fs = 22;
+        Vector2 sz = MeasureTextEx(GetFontDefault(), msg, fs, 1);
+        DrawText(msg,
+                 (int)((float)bx + ((float)bw - sz.x) / 2.0f),
+                 (int)((float)by + ((float)bh - sz.y) / 2.0f),
+                 fs, TCOLORS[0]);
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   SHARED DRAW FRAME
+   Draws edges, chips, packets given anim positions and path info.
+   ═══════════════════════════════════════════════════════════════════ */
+static void draw_frame(const Graph* g,
+                       TravAnim anims[], int numTravelers,
+                       Traveler* travelers,       /* may be NULL for M5 */
+                       int cur_nodes[],           /* may be NULL for M4 */
+                       int nxt_nodes[],           /* may be NULL for M4 */
+                       Font font)
+{
+    /* edges */
+    for (int i = 0; i < g->numEdges; i++) {
+        int u = g->edges[i].source;
+        int v = g->edges[i].destination;
+        int hi = 0;
+
+        if (travelers)
+            hi = any_on_path(travelers, numTravelers, u, v);
+        else if (cur_nodes && nxt_nodes)
+            for (int t = 0; t < numTravelers; t++)
+                if (cur_nodes[t] == u && nxt_nodes[t] == v) { hi = 1; break; }
+
+        draw_arrow(gPos[u], gPos[v], hi);
+        draw_weight_label(gPos[u], gPos[v], g->edges[i].weight, font);
+    }
+
+    /* chips */
+    for (int node = 0; node < g->numNodes; node++) {
+        int   use_col = 0;
+        Color col     = C_CHIP_BORDER;
+
+        for (int t = 0; t < numTravelers; t++) {
+            int at_node = 0;
+
+            if (travelers) {
+                /* M4: waiting or idle at this node */
+                if (anims[t].state == ANIM_WAITING
+                    && anims[t].segIdx+1 < travelers[t].pathLength
+                    && travelers[t].path[anims[t].segIdx+1] == node)
+                    at_node = 1;
+                if (anims[t].state == ANIM_IDLE
+                    && travelers[t].pathLength > 0
+                    && travelers[t].path[0] == node)
+                    at_node = 1;
+            } else if (cur_nodes) {
+                /* M5: currently at this node */
+                if (cur_nodes[t] == node && anims[t].state != ANIM_DONE)
+                    at_node = 1;
+            }
+
+            if (at_node) {
+                col     = TCOLORS[t % MAX_TRAVELERS];
+                use_col = 1; break;
+            }
+        }
+        draw_cpu(gPos[node], node, col, use_col, font);
+    }
+
+    /* packets */
+    for (int i = 0; i < numTravelers; i++) {
+        if (anims[i].state == ANIM_IDLE || anims[i].state == ANIM_DONE) continue;
+        draw_packet(anims[i].pos, TCOLORS[i % MAX_TRAVELERS]);
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   PUBLIC: MILESTONE 4
+   ═══════════════════════════════════════════════════════════════════ */
+void draw_gui_m4(const Graph* g, Traveler* travelers, int numTravelers)
+{
+    if (!g || !travelers || numTravelers <= 0) return;
 
     compute_layout(g->numNodes);
 
-    /* build animation state for every traveler */
     TravAnim anims[MAX_TRAVELERS];
     for (int i = 0; i < numTravelers; i++)
         trav_anim_init(&anims[i], &travelers[i], g);
 
+    int sources[MAX_TRAVELERS], dests[MAX_TRAVELERS];
+    for (int i = 0; i < numTravelers; i++) {
+        sources[i] = travelers[i].source;
+        dests[i]   = travelers[i].destination;
+    }
+
     SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_HIGHDPI);
-    InitWindow(WINDOW_W, WINDOW_H,
-               "OS Project — Graph Visualiser M4 (PCB edition)");
+    InitWindow(WINDOW_W, WINDOW_H, "OS Project — Graph Visualiser M4 (PCB edition)");
     SetTargetFPS(FPS);
     Font font = GetFontDefault();
+    int playing = 0;
 
-    int playing = 0;   /* 0 = paused, 1 = running */
-
-    /* ═══ MAIN LOOP ═══ */
     while (!WindowShouldClose()) {
-
         float dt = GetFrameTime();
 
-        /* check if every traveler has finished */
         int all_done = 1;
         for (int i = 0; i < numTravelers; i++)
             if (anims[i].state != ANIM_DONE) { all_done = 0; break; }
 
-        /* ── button ── */
         if (draw_button(playing, all_done)) {
             if (all_done) {
-                /* restart: re-init all anims and start playing */
                 for (int i = 0; i < numTravelers; i++)
                     trav_anim_init(&anims[i], &travelers[i], g);
                 playing = 1;
@@ -449,111 +516,210 @@ void draw_gui(const Graph* g, Traveler* travelers, int numTravelers)
             }
         }
 
-        /* when playing, release IDLE travelers into MOVING */
-        if (playing) {
+        if (playing)
             for (int i = 0; i < numTravelers; i++)
-                if (anims[i].state == ANIM_IDLE) {
+                if (anims[i].state == ANIM_IDLE)
                     anims[i].state = ANIM_MOVING;
-                }
-        }
 
-        /* advance all animations */
         if (playing)
             for (int i = 0; i < numTravelers; i++)
                 trav_anim_tick(&anims[i], &travelers[i], g, dt);
 
-        /* ════════════ DRAW ════════════ */
         BeginDrawing();
         ClearBackground(C_BG);
         draw_background();
+        draw_frame(g, anims, numTravelers, travelers, NULL, NULL, font);
+        draw_hud(g, numTravelers, sources, dests, playing, all_done,
+                 "OS Project — Graph Visualiser M4");
+        draw_button(playing, all_done);
+        EndDrawing();
+    }
 
-        /* 1. edges — highlight if any traveler's path uses them */
-        for (int i = 0; i < g->numEdges; i++) {
-            int u = g->edges[i].source;
-            int v = g->edges[i].destination;
-            int w = g->edges[i].weight;
-            draw_arrow(gPos[u], gPos[v],
-                       any_on_path(travelers, numTravelers, u, v));
-            draw_weight_label(gPos[u], gPos[v], w, font);
-        }
+    CloseWindow();
+}
 
-        /* 2. CPU chips
-         *    If a traveler is currently waiting at this node, tint the
-         *    border with that traveler's colour. */
-        for (int node = 0; node < g->numNodes; node++) {
-            int        use_col = 0;
-            Color      col     = C_CHIP_BORDER;
-            for (int t = 0; t < numTravelers; t++) {
-                /* waiting at this node? */
-                if (anims[t].state == ANIM_WAITING
-                    && anims[t].segIdx + 1 < travelers[t].pathLength
-                    && travelers[t].path[anims[t].segIdx + 1] == node) {
-                    col = TCOLORS[travelers[t].colorIndex % MAX_TRAVELERS];
-                    use_col = 1; break;
-                }
-                /* IDLE at source or DONE at destination */
-                if (anims[t].state == ANIM_IDLE
-                    && travelers[t].pathLength > 0
-                    && travelers[t].path[0] == node) {
-                    col = TCOLORS[travelers[t].colorIndex % MAX_TRAVELERS];
-                    use_col = 1; break;
+/* ═══════════════════════════════════════════════════════════════════
+   PUBLIC: MILESTONE 5
+   ═══════════════════════════════════════════════════════════════════ */
+void draw_gui_m5(const Graph* g,
+                 int read_fds[], int sources[], int dests[],
+                 int numTravelers)
+{
+    if (!g || !read_fds || numTravelers <= 0) return;
+
+    compute_layout(g->numNodes);
+
+    /* ── buffer: collect ALL pipe messages before opening the window ──
+       Children compute and send immediately after forking. We drain all
+       pipes here so nothing is lost, then replay on Play press.         */
+    TravelMessage buf[MAX_TRAVELERS][MAX_NODES * 2 + 2];
+    int           buf_len[MAX_TRAVELERS];
+    memset(buf_len, 0, sizeof(buf_len));
+
+    {
+        int closed[MAX_TRAVELERS];
+        memset(closed, 0, sizeof(closed));
+        int active = numTravelers;
+
+        while (active > 0) {
+            fd_set rfds;
+            FD_ZERO(&rfds);
+            int maxfd = 0;
+            for (int i = 0; i < numTravelers; i++) {
+                if (!closed[i]) {
+                    FD_SET(read_fds[i], &rfds);
+                    if (read_fds[i] > maxfd) maxfd = read_fds[i];
                 }
             }
-            draw_cpu(gPos[node], node, col, use_col, font);
+            /* block until at least one message arrives */
+            if (select(maxfd+1, &rfds, NULL, NULL, NULL) <= 0) break;
+
+            for (int i = 0; i < numTravelers; i++) {
+                if (closed[i] || !FD_ISSET(read_fds[i], &rfds)) continue;
+                TravelMessage msg;
+                ssize_t n = read(read_fds[i], &msg, sizeof(msg));
+                if (n <= 0) { closed[i] = 1; active--; continue; }
+
+                int idx = buf_len[i];
+                if (idx < MAX_NODES * 2 + 2)
+                    buf[i][buf_len[i]++] = msg;
+
+                if (msg.finished) { closed[i] = 1; active--; }
+            }
+        }
+    }
+
+    /* ── animation state ── */
+    TravAnim anims[MAX_TRAVELERS];
+    int cur_node[MAX_TRAVELERS], nxt_node[MAX_TRAVELERS];
+    int buf_pos[MAX_TRAVELERS];   /* replay cursor per traveler */
+
+    for (int i = 0; i < numTravelers; i++) {
+        memset(&anims[i], 0, sizeof(TravAnim));
+        anims[i].state = ANIM_IDLE;
+        anims[i].pos   = gPos[sources[i]];
+        cur_node[i]    = sources[i];
+        nxt_node[i]    = -1;
+        buf_pos[i]     = 0;
+    }
+
+    int playing  = 0;
+    int all_done = 0;
+
+    /* time until next message replay per traveler */
+    float next_msg_timer[MAX_TRAVELERS];
+    memset(next_msg_timer, 0, sizeof(next_msg_timer));
+
+    SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_HIGHDPI);
+    InitWindow(WINDOW_W, WINDOW_H, "OS Project — Graph Visualiser M5 (PCB edition)");
+    SetTargetFPS(FPS);
+    Font font = GetFontDefault();
+
+    while (!WindowShouldClose()) {
+        float dt = GetFrameTime();
+
+        /* ── button ── */
+        if (draw_button(playing, all_done)) {
+            if (all_done) {
+                /* restart: reset all cursors and anim state */
+                for (int i = 0; i < numTravelers; i++) {
+                    memset(&anims[i], 0, sizeof(TravAnim));
+                    anims[i].state  = ANIM_IDLE;
+                    anims[i].pos    = gPos[sources[i]];
+                    cur_node[i]     = sources[i];
+                    nxt_node[i]     = -1;
+                    buf_pos[i]      = 0;
+                    next_msg_timer[i] = 0.0f;
+                }
+                all_done = 0;
+                playing  = 1;
+            } else {
+                playing = !playing;
+            }
         }
 
-        /* 3. packets — one per traveler, each in its own colour */
+        if (!playing) goto draw;
+
+        /* ── replay buffered messages at the correct pace ── */
+        {
+            int done_count = 0;
+            for (int i = 0; i < numTravelers; i++) {
+                if (anims[i].state == ANIM_DONE) { done_count++; continue; }
+
+                next_msg_timer[i] -= dt;
+                if (next_msg_timer[i] > 0.0f) continue;
+
+                if (buf_pos[i] >= buf_len[i]) { done_count++; continue; }
+
+                TravelMessage* msg = &buf[i][buf_pos[i]++];
+
+                if (msg->finished) {
+                    printf("[PID=%d] finished\n", (int)msg->pid);
+                    fflush(stdout);
+                    anims[i].state = ANIM_DONE;
+                    done_count++;
+                } else if (msg->next_node == -1) {
+                    printf("[PID=%d] arrived at node %d | DESTINATION\n",
+                           (int)msg->pid, msg->current_node);
+                    fflush(stdout);
+                    anims[i].pos   = gPos[msg->current_node];
+                    anims[i].state = ANIM_DONE;
+                    cur_node[i]    = msg->current_node;
+                    nxt_node[i]    = -1;
+                    done_count++;
+                } else {
+                    printf("[PID=%d] arrived at node %d | next node: %d\n",
+                           (int)msg->pid, msg->current_node, msg->next_node);
+                    fflush(stdout);
+                    cur_node[i]       = msg->current_node;
+                    nxt_node[i]       = msg->next_node;
+                    anims[i].state    = ANIM_MOVING;
+                    anims[i].timer    = 0.0f;
+                    anims[i].pos      = gPos[msg->current_node];
+
+                    /* compute delay until next message = W × HOP_SEC */
+                    int w = 1;
+                    AdjNode* cur = g->adjLists[msg->current_node];
+                    while (cur) {
+                        if (cur->destination == msg->next_node) { w = cur->weight; break; }
+                        cur = cur->next;
+                    }
+                    next_msg_timer[i] = (float)w * HOP_SEC;
+                }
+            }
+            all_done = (done_count == numTravelers);
+        }
+
+        /* ── smooth interpolation between current and next node ── */
         for (int i = 0; i < numTravelers; i++) {
-            if (anims[i].state == ANIM_IDLE ||
-                anims[i].state == ANIM_DONE) continue;
-            draw_packet(anims[i].pos,
-                        TCOLORS[travelers[i].colorIndex % MAX_TRAVELERS]);
+            if (anims[i].state != ANIM_MOVING || nxt_node[i] < 0) continue;
+            anims[i].timer += dt;
+            /* travel time for this hop = W × HOP_SEC */
+            int w = 1;
+            AdjNode* cur = g->adjLists[cur_node[i]];
+            while (cur) {
+                if (cur->destination == nxt_node[i]) { w = cur->weight; break; }
+                cur = cur->next;
+            }
+            float hop_dur = (float)w * HOP_SEC;
+            float t = anims[i].timer / hop_dur;
+            if (t > 1.0f) t = 1.0f;
+            Vector2 from = gPos[cur_node[i]];
+            Vector2 to   = gPos[nxt_node[i]];
+            anims[i].pos = (Vector2){
+                from.x + (to.x - from.x) * t,
+                from.y + (to.y - from.y) * t
+            };
         }
 
-        /* 4. HUD */
-        DrawText("OS Project — Graph Visualiser", 16, 14, 18, C_HUD);
-        char info[80];
-        snprintf(info, sizeof(info),
-                 "Nodes: %d   Edges: %d   Travelers: %d",
-                 g->numNodes, g->numEdges, numTravelers);
-        DrawText(info, 16, 36, 14, C_HUD_DIM);
-
-        /* traveler legend top-right */
-        for (int i = 0; i < numTravelers; i++) {
-            Color col = TCOLORS[travelers[i].colorIndex % MAX_TRAVELERS];
-            int lx = WINDOW_W - 210, ly = 14 + i * 18;
-            DrawRectangle(lx, ly, 12, 12, col);
-            char lbl[32];
-            snprintf(lbl, sizeof(lbl), "T%d: CPU%d -> CPU%d",
-                     i, travelers[i].source, travelers[i].destination);
-            DrawText(lbl, lx + 16, ly, 12, col);
-        }
-
-        /* status line */
-        const char* status = all_done ? "" :
-                             playing  ? "Transmitting..." :
-                                        "Paused — Press Play";
-        DrawText(status, 16, WINDOW_H - 48, 14, C_HUD_DIM);
-        DrawText("[ESC] Quit", 16, WINDOW_H - 24, 13, C_HUD_DIM);
-
-        /* 5. "all arrived" banner */
-        if (all_done) {
-            int bw = 420, bh = 64;
-            int bx = (WINDOW_W - bw) / 2, by = (WINDOW_H - bh) / 2;
-            DrawRectangleRounded(
-                (Rectangle){(float)bx,(float)by,(float)bw,(float)bh},
-                0.2f, 8, CLITERAL(Color){0,0,0,220});
-            DrawRectangleRoundedLines(
-                (Rectangle){(float)bx,(float)by,(float)bw,(float)bh},
-                0.2f, 8, TCOLORS[0]);
-            const char* msg = "All travelers arrived!";
-            int fs = 22;
-            Vector2 sz = MeasureTextEx(font, msg, fs, 1);
-            DrawTextEx(font, msg,
-                       (Vector2){bx+(bw-sz.x)/2.0f, by+(bh-sz.y)/2.0f},
-                       fs, 1, TCOLORS[0]);
-        }
-
+        draw:
+        BeginDrawing();
+        ClearBackground(C_BG);
+        draw_background();
+        draw_frame(g, anims, numTravelers, NULL, cur_node, nxt_node, font);
+        draw_hud(g, numTravelers, sources, dests, playing, all_done,
+                 "OS Project — Graph Visualiser M5");
+        draw_button(playing, all_done);
         EndDrawing();
     }
 
