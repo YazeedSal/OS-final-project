@@ -41,13 +41,7 @@ milestone6:
 	    -I$(INC) -o sim $(LIBS) -pthread
 	@echo "Built milestone 6 -> ./sim"
 
-test_m6:
-	$(CC) $(CFLAGS) $(SRC)/main_m6.c \
-	    $(SRC)/graph.c \
-	    $(SRC)/dijkstra.c \
-	    $(SRC)/ipc.c \
-	    $(SRC)/sync.c \
-	    -I$(INC) -o test_m6 -pthread
+
 clean:
 	rm -f dijkstra sim
 	@echo "Cleaned build artifacts"
