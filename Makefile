@@ -1,11 +1,10 @@
 CC     = gcc
 CFLAGS = -Wall -Wextra -g
-LIBS   = -lraylib -lm -lX11
+LIBS   = -lraylib -lm
 SRC    = src
 INC    = include
 
-.PHONY: milestone1 milestone2 milestone3 milestone4 milestone5 clean
-
+.PHONY: milestone1 milestone2 milestone3 milestone4 milestone5 milestone6 clean
 
 milestone1:
 	$(CC) $(CFLAGS) $(SRC)/main_m1.c $(SRC)/graph.c $(SRC)/dijkstra.c \
@@ -36,11 +35,11 @@ milestone5:
 	@echo "Built milestone 5 -> ./sim"
 
 milestone6:
-	$(CC) $(CFLAGS) -DMILESTONE6 $(SRC)/main_m6.c $(SRC)/graph.c \
-	    $(SRC)/dijkstra.c $(SRC)/travelers.c $(SRC)/ipc.c $(SRC)/sync.c $(SRC)/gui_m4.c \
-	    -I$(INC) -o sim $(LIBS) -pthread
+	$(CC) $(CFLAGS) -DMILESTONE5 -DMILESTONE6 $(SRC)/main.c $(SRC)/graph.c \
+	    $(SRC)/dijkstra.c $(SRC)/travelers.c $(SRC)/ipc.c \
+	    $(SRC)/sync.c $(SRC)/gui_m4.c \
+	    -I$(INC) -o sim $(LIBS) -lpthread
 	@echo "Built milestone 6 -> ./sim"
-
 
 clean:
 	rm -f dijkstra sim

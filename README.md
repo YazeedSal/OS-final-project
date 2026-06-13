@@ -31,7 +31,7 @@ This project simulates movement across a directed graph, where multiple "passeng
 | 3 | Movement animation on the graph |✅ Done |
 | 4 | Multiple processes & parent process | ✅ Done |
 | 5 | Inter-process communication (IPC) | ✅ Done |
-| 6 | Synchronization | ⏳ Pending |
+| 6 | Synchronization | ✅ Done |
 | 7 | Scheduling algorithms | ⏳ Pending |
 
 Each milestone is tagged in Git using the format `milestone1`, `milestone2`, etc.
@@ -63,6 +63,13 @@ Each child now computes its **own** Dijkstra path autonomously — the parent no
 
 Pipes were chosen because they are simple, require no shared-memory setup, and map cleanly onto the one-producer/one-consumer relationship between each child and the parent.
 
+### Milestone 6 — Synchronization
+Adds a critical section constraint: **at most one traveler can be inside a node at any time**. When a traveler arrives at an occupied node it waits outside until the current occupant finishes its 1-second stay and leaves.
+
+**Synchronization mechanism: POSIX named semaphores** (`sem_open`) — one semaphore per node, initialised to 1 (binary semaphore). `sync_enter_node()` calls `sem_wait()` which blocks if the node is occupied. `sync_leave_node()` calls `sem_post()` to release it. Semaphores are named using the parent PID to avoid collisions between concurrent runs.
+
+Each child now sends two pipe messages per node: a **WAITING** message before calling `sem_wait()` (so the GUI can show the traveler queued outside), and an **ENTERED** message after acquiring the semaphore (so the GUI shows the traveler inside). The GUI renders queued travelers as dim pulsing rings offset around the node, distinct from the solid moving packets.
+
 ---
 
 
@@ -76,13 +83,15 @@ os-simulation-project/
 │   ├── gui.c             # GUI for milestones 4 & 5 (draw_gui_m4, draw_gui_m5)
 │   ├── gui_m23.c         # GUI for milestones 2 & 3
 │   ├── travelers.c       # Traveler struct, fork, kill, wait, path computation
-│   └── ipc.c             # Child travel logic with pipe-based IPC (milestone 5)
+│   ├── ipc.c             # Child travel logic with pipe-based IPC (milestone 5)
+│   └── sync.c            # POSIX named semaphore per node (milestone 6)
 ├── include/              # All .h header files
 │   ├── graph.h           # Graph struct and function declarations
 │   ├── dijkstra.h        # Dijkstra function declarations
 │   ├── gui.h             # GUI function declarations (M4 & M5)
 │   ├── travelers.h       # Traveler struct and function declarations
 │   ├── ipc.h             # TravelMessage struct and child_travel declaration
+│   ├── sync.h            # sync_init/destroy/enter/leave declarations (milestone 6)
 │   └── skip_comments.h   # Shared inline helper for skipping # comment lines
 ├── tests/                # Input/output test cases
 │   ├── input1.txt        # Sample input for milestones 1–3
@@ -136,6 +145,12 @@ src dst      # one traveler per line
 ...
 ```
 Lines starting with `#` are ignored.
+
+### Milestone 6
+```bash
+make milestone6
+./sim tests/input_m5.txt
+```
 
 ### Clean
 ```bash
