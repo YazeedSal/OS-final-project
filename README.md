@@ -149,7 +149,7 @@ Lines starting with `#` are ignored.
 ### Milestone 6
 ```bash
 make milestone6
-./sim tests/input_m5.txt
+./sim tests/input_m6.txt
 ```
 
 ### Clean
