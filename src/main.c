@@ -4,17 +4,22 @@
 #include <sys/wait.h>
 
 #include "../include/graph.h"
+#include "../include/gui_m4.h"
 #include "../include/skip_comments.h"
 
 #ifdef MILESTONE4
-#include "../include/gui_m4.h"
 #include "../include/travelers.h"
 #endif
 
 #ifdef MILESTONE5
-#include "../include/gui_m4.h"
 #include "../include/travelers.h"
 #include "../include/ipc.h"
+#endif
+
+#ifdef MILESTONE6
+#include "../include/travelers.h"
+#include "../include/ipc.h"
+#include "../include/sync.h"
 #endif
 
 /* helper: reopen file and skip past the graph edges so readTravelers()
@@ -44,7 +49,7 @@ int main(int argc, char* argv[])
     printf("Graph loaded successfully.\n");
     printGraph(&graph);
 
-/* ══════════════ MILESTONE 5 ══════════════ */
+/* ══════════════ MILESTONE 5 & 6 ══════════════ */
 #ifdef MILESTONE5
 
     FILE* f = fopen(argv[1], "r");
@@ -71,6 +76,11 @@ int main(int argc, char* argv[])
         if (pipe(pipes[i]) == -1) { perror("pipe"); freeGraph(&graph); return 1; }
     }
 
+#ifdef MILESTONE6
+    /* initialise one semaphore per node before any child is forked */
+    sync_init(graph.numNodes);
+#endif
+
     for (int i = 0; i < numTravelers; i++) {
         pid_t pid = fork();
         if (pid < 0) { perror("fork"); freeGraph(&graph); return 1; }
@@ -94,6 +104,10 @@ int main(int argc, char* argv[])
 
     for (int i = 0; i < numTravelers; i++)
         waitpid(pids[i], NULL, 0);
+
+#ifdef MILESTONE6
+    sync_destroy(graph.numNodes);
+#endif
 
 /* ══════════════ MILESTONE 4 ══════════════ */
 #elif defined(MILESTONE4)

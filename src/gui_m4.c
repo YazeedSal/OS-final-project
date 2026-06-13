@@ -1,12 +1,14 @@
 /*
- * gui.c — Milestones 4 & 5: Graph Visualiser (PCB edition)
+ * gui_m4.c — Milestones 4, 5 & 6: Graph Visualiser (PCB edition)
  *
- * Two public entry points:
+ * Entry points:
  *   draw_gui_m4()  — M4: path-driven animation, Play/Stop button
- *   draw_gui_m5()  — M5: pipe-driven animation, Play/Stop pauses visuals only
+ *   draw_gui_m5()  — M5/M6: pipe-driven animation, Play/Stop pauses visuals
  *
- * All drawing code is shared between both entry points.
- * No #ifdefs, no legacy code.
+ * M6 additions:
+ *   - ANIM_QUEUED state: traveler is blocked outside a node (sem_wait)
+ *   - Queued travelers drawn as a dim pulsing ring beside the node
+ *   - WAITING pipe messages consumed instantly (no timer delay)
  */
 
 #include <raylib.h>
@@ -34,9 +36,13 @@
 #define LEG_THICK        2
 #define LEG_SPACING      9
 
-#define HOP_SEC       0.30f
-#define NODE_WAIT_SEC 1.00f
-#define ENTITY_R      10.0f
+#define HOP_SEC       0.30f   /* seconds per hop (300ms × weight = total) */
+#define NODE_WAIT_SEC 1.00f   /* seconds to wait at a node (M4)           */
+#define ENTITY_R      10.0f   /* moving packet radius                      */
+#define QUEUED_R       7.0f   /* queued packet radius (smaller)            */
+
+/* buffer per traveler: worst case M6 = 2 messages per node + finished */
+#define MSG_BUF_SIZE  (MAX_NODES * 2 + 4)
 
 /* ═══════════════════════════════════════════════════════════════════
    COLOURS
@@ -82,8 +88,19 @@ static const Color TCOLORS[MAX_TRAVELERS] = {
 
 /* ═══════════════════════════════════════════════════════════════════
    ANIMATION STATE
+   ANIM_IDLE    — not started yet
+   ANIM_MOVING  — travelling along an edge
+   ANIM_WAITING — inside a node, waiting 1s (M4)
+   ANIM_QUEUED  — blocked outside a node waiting for semaphore (M6)
+   ANIM_DONE    — reached destination
    ═══════════════════════════════════════════════════════════════════ */
-typedef enum { ANIM_IDLE, ANIM_MOVING, ANIM_WAITING, ANIM_DONE } AnimState;
+typedef enum {
+    ANIM_IDLE,
+    ANIM_MOVING,
+    ANIM_WAITING,
+    ANIM_QUEUED,
+    ANIM_DONE
+} AnimState;
 
 typedef struct {
     AnimState state;
@@ -92,6 +109,7 @@ typedef struct {
     int       hopTotal;
     float     timer;
     Vector2   pos;
+    int       queued_at;   /* node index where traveler is queued (-1 if not) */
 } TravAnim;
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -138,11 +156,12 @@ static int any_on_path(const Traveler* travelers, int count, int u, int v)
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   ANIMATION TICK  (M4 path-driven)
+   ANIMATION TICK  (M4 path-driven only)
    ═══════════════════════════════════════════════════════════════════ */
 static void trav_anim_init(TravAnim* a, const Traveler* t, const Graph* g)
 {
     memset(a, 0, sizeof(TravAnim));
+    a->queued_at = -1;
     if (t->pathLength < 1) { a->state = ANIM_DONE; return; }
     a->state    = ANIM_IDLE;
     a->segIdx   = 0;
@@ -176,31 +195,38 @@ static void trav_anim_tick(TravAnim* a, const Traveler* t,
         return;
     }
 
-    /* ANIM_MOVING */
+    /* ANIM_MOVING: advance along current segment */
     Vector2 from = gPos[t->path[a->segIdx]];
     Vector2 to   = gPos[t->path[a->segIdx + 1]];
 
+    /* travel time for this segment = weight × HOP_SEC */
+    int w = edge_weight(g, t->path[a->segIdx], t->path[a->segIdx + 1]);
+    float seg_dur = (float)w * HOP_SEC;
+
     if (a->timer >= HOP_SEC) {
-        a->timer = 0.0f;
+        a->timer -= HOP_SEC;
         a->hopIdx++;
-        if (a->hopIdx >= a->hopTotal) {
-            a->pos = to;
+        if (a->hopIdx >= w) {
+            /* arrived at next node */
+            a->pos    = to;
+            a->hopIdx = 0;
             if (t->path[a->segIdx + 1] == t->path[t->pathLength - 1])
                 a->state = ANIM_DONE;
             else
                 a->state = ANIM_WAITING;
         } else {
-            float tf = (float)a->hopIdx / (float)a->hopTotal;
+            float tf = (float)a->hopIdx / (float)w;
             a->pos = (Vector2){ from.x + (to.x - from.x) * tf,
                                 from.y + (to.y - from.y) * tf };
         }
     } else {
-        float t0 = (float)a->hopIdx       / (float)a->hopTotal;
-        float t1 = (float)(a->hopIdx + 1) / (float)a->hopTotal;
+        float t0 = (float)a->hopIdx       / (float)w;
+        float t1 = (float)(a->hopIdx + 1) / (float)w;
         float tf = t0 + (t1 - t0) * (a->timer / HOP_SEC);
         a->pos = (Vector2){ from.x + (to.x - from.x) * tf,
                             from.y + (to.y - from.y) * tf };
     }
+    (void)seg_dur;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -227,7 +253,7 @@ static void draw_background(void)
 /* ═══════════════════════════════════════════════════════════════════
    DRAW: arrow
    ═══════════════════════════════════════════════════════════════════ */
-static void draw_arrow(Vector2 p1, Vector2 p2, int highlighted)
+static void draw_arrow(Vector2 p1, Vector2 p2, int highlighted, Color hi_col)
 {
     float margin = CHIP_HALF + LEG_LEN + 3.0f;
     float head = 16.0f, wing = 7.0f;
@@ -244,14 +270,17 @@ static void draw_arrow(Vector2 p1, Vector2 p2, int highlighted)
     Vector2 bl   = { base.x + px*wing, base.y + py*wing };
     Vector2 br   = { base.x - px*wing, base.y - py*wing };
 
-    Color hi    = highlighted ? C_PATH_HI : C_TRACE_HI;
-    Color lo    = highlighted ? C_PATH_LO : C_TRACE_LO;
+    Color hi    = highlighted ? hi_col   : C_TRACE_HI;
+    Color lo    = highlighted ? CLITERAL(Color){(unsigned char)(hi_col.r/4),
+                                                (unsigned char)(hi_col.g/4),
+                                                (unsigned char)(hi_col.b/4), 255}
+                              : C_TRACE_LO;
     float thick = highlighted ? 6.0f : 5.0f;
     float thin  = highlighted ? 3.0f : 2.0f;
 
     DrawLineEx(a, base, thick, lo);
     DrawLineEx(a, base, thin,  hi);
-    DrawTriangle(tip, br, bl, hi);   /* CCW: tip → right → left */
+    DrawTriangle(tip, br, bl, hi);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -322,15 +351,15 @@ static void draw_cpu(Vector2 p, int id, Color border_col,
     DrawCircle((int)(p.x-9),(int)(p.y+9),2,C_CHIP_INNER);
     DrawCircle((int)(p.x+9),(int)(p.y-9),2,C_CHIP_INNER);
 
-    char buf[10];
-    snprintf(buf, sizeof(buf), "CPU%d", id);
+    char buf2[10];
+    snprintf(buf2, sizeof(buf2), "CPU%d", id);
     int fs = 13;
-    Vector2 sz = MeasureTextEx(font, buf, fs, 1);
-    DrawTextEx(font, buf, (Vector2){p.x-sz.x/2, p.y-sz.y/2}, fs, 1, C_LABEL);
+    Vector2 sz = MeasureTextEx(font, buf2, fs, 1);
+    DrawTextEx(font, buf2, (Vector2){p.x-sz.x/2, p.y-sz.y/2}, fs, 1, C_LABEL);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   DRAW: packet
+   DRAW: moving packet (solid, full brightness)
    ═══════════════════════════════════════════════════════════════════ */
 static void draw_packet(Vector2 pos, Color col)
 {
@@ -338,6 +367,33 @@ static void draw_packet(Vector2 pos, Color col)
     DrawCircle((int)pos.x,(int)pos.y,(int)(ENTITY_R+8),glow);
     DrawCircle((int)pos.x,(int)pos.y,(int)ENTITY_R,col);
     DrawCircle((int)pos.x,(int)pos.y,4,CLITERAL(Color){30,15,0,255});
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   DRAW: queued packet (dim ring outside node, offset by queue index)
+   Shows clearly that this traveler is waiting outside the node.
+   ═══════════════════════════════════════════════════════════════════ */
+static void draw_queued_packet(Vector2 node_pos, Color col,
+                               int queue_idx, float time)
+{
+    /* offset each queued traveler in a small arc around the node */
+    float angle = -PI / 2.0f + (float)queue_idx * (PI / 4.0f);
+    float dist  = CHIP_HALF + LEG_LEN + ENTITY_R + 10.0f;
+    Vector2 pos = {
+        node_pos.x + cosf(angle) * dist,
+        node_pos.y + sinf(angle) * dist
+    };
+
+    /* dim colour */
+    Color dim = col; dim.a = 120;
+    /* pulsing outer ring */
+    float pulse = 0.5f + 0.5f * sinf(time * 4.0f);
+    Color ring = col; ring.a = (unsigned char)(80.0f * pulse);
+
+    DrawCircle((int)pos.x,(int)pos.y,(int)(QUEUED_R+6),ring);
+    DrawCircle((int)pos.x,(int)pos.y,(int)QUEUED_R,dim);
+    /* dashed border to distinguish from moving packet */
+    DrawCircleLines((int)pos.x,(int)pos.y,(int)(QUEUED_R+2),col);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -350,7 +406,7 @@ static int draw_button(int playing, int all_done)
     int clicked = hov && IsMouseButtonPressed(MOUSE_LEFT_BUTTON);
 
     DrawRectangleRounded(btn, 0.3f, 6, hov ? C_BTN_HOV   : C_BTN_IDLE);
-    DrawRectangleRoundedLines(btn, 0.3f, 6, hov ? C_BTN_HBORD : C_BTN_BORDER);
+    DrawRectangleRoundedLines(btn, 0.3f,6, hov ? C_BTN_HBORD : C_BTN_BORDER);
 
     const char* lbl = all_done ? "Restart" : playing ? "[ Stop ]" : "[ Play ]";
     int fs = 16;
@@ -364,7 +420,7 @@ static int draw_button(int playing, int all_done)
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   DRAW: shared HUD elements
+   DRAW: HUD
    ═══════════════════════════════════════════════════════════════════ */
 static void draw_hud(const Graph* g, int numTravelers,
                      int sources[], int dests[],
@@ -409,57 +465,73 @@ static void draw_hud(const Graph* g, int numTravelers,
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   SHARED DRAW FRAME
-   Draws edges, chips, packets given anim positions and path info.
+   DRAW FRAME — shared by M4 and M5/M6
    ═══════════════════════════════════════════════════════════════════ */
 static void draw_frame(const Graph* g,
                        TravAnim anims[], int numTravelers,
-                       Traveler* travelers,       /* may be NULL for M5 */
-                       int cur_nodes[],           /* may be NULL for M4 */
-                       int nxt_nodes[],           /* may be NULL for M4 */
-                       Font font)
+                       Traveler* travelers,   /* M4: non-NULL, M5/M6: NULL */
+                       int cur_nodes[],       /* M5/M6: non-NULL, M4: NULL */
+                       int nxt_nodes[],       /* M5/M6: non-NULL, M4: NULL */
+                       Font font, float time)
 {
-    /* edges */
+    /* ── edges ── */
     for (int i = 0; i < g->numEdges; i++) {
         int u = g->edges[i].source;
         int v = g->edges[i].destination;
-        int hi = 0;
+        int   hi     = 0;
+        Color hi_col = C_PATH_HI;   /* fallback, overridden below */
 
-        if (travelers)
-            hi = any_on_path(travelers, numTravelers, u, v);
-        else if (cur_nodes && nxt_nodes)
-            for (int t = 0; t < numTravelers; t++)
-                if (cur_nodes[t] == u && nxt_nodes[t] == v) { hi = 1; break; }
+        if (travelers) {
+            /* M4: find which traveler is on this edge and use their colour */
+            for (int t = 0; t < numTravelers; t++) {
+                if (on_path(&travelers[t], u, v)) {
+                    hi     = 1;
+                    hi_col = TCOLORS[t % MAX_TRAVELERS];
+                    break;
+                }
+            }
+        } else if (cur_nodes && nxt_nodes) {
+            /* M5/M6: find the traveler currently traversing this edge */
+            for (int t = 0; t < numTravelers; t++) {
+                if (cur_nodes[t] == u && nxt_nodes[t] == v) {
+                    hi     = 1;
+                    hi_col = TCOLORS[t % MAX_TRAVELERS];
+                    break;
+                }
+            }
+        }
 
-        draw_arrow(gPos[u], gPos[v], hi);
+        draw_arrow(gPos[u], gPos[v], hi, hi_col);
         draw_weight_label(gPos[u], gPos[v], g->edges[i].weight, font);
     }
 
-    /* chips */
+    /* ── chips — tint border for travelers inside the node ── */
     for (int node = 0; node < g->numNodes; node++) {
         int   use_col = 0;
         Color col     = C_CHIP_BORDER;
 
         for (int t = 0; t < numTravelers; t++) {
-            int at_node = 0;
+            int inside = 0;
 
             if (travelers) {
-                /* M4: waiting or idle at this node */
+                /* M4: WAITING state = inside node */
                 if (anims[t].state == ANIM_WAITING
                     && anims[t].segIdx+1 < travelers[t].pathLength
                     && travelers[t].path[anims[t].segIdx+1] == node)
-                    at_node = 1;
+                    inside = 1;
                 if (anims[t].state == ANIM_IDLE
                     && travelers[t].pathLength > 0
                     && travelers[t].path[0] == node)
-                    at_node = 1;
+                    inside = 1;
             } else if (cur_nodes) {
-                /* M5: currently at this node */
-                if (cur_nodes[t] == node && anims[t].state != ANIM_DONE)
-                    at_node = 1;
+                /* M5/M6: MOVING or WAITING (inside) state at this node */
+                if (cur_nodes[t] == node
+                    && anims[t].state != ANIM_DONE
+                    && anims[t].state != ANIM_QUEUED)
+                    inside = 1;
             }
 
-            if (at_node) {
+            if (inside) {
                 col     = TCOLORS[t % MAX_TRAVELERS];
                 use_col = 1; break;
             }
@@ -467,10 +539,25 @@ static void draw_frame(const Graph* g,
         draw_cpu(gPos[node], node, col, use_col, font);
     }
 
-    /* packets */
+    /* ── moving packets (not queued, not idle, not done) ── */
     for (int i = 0; i < numTravelers; i++) {
-        if (anims[i].state == ANIM_IDLE || anims[i].state == ANIM_DONE) continue;
+        if (anims[i].state == ANIM_IDLE   ||
+            anims[i].state == ANIM_DONE   ||
+            anims[i].state == ANIM_QUEUED) continue;
         draw_packet(anims[i].pos, TCOLORS[i % MAX_TRAVELERS]);
+    }
+
+    /* ── queued packets: one per node, offset by queue position ── */
+    for (int node = 0; node < g->numNodes; node++) {
+        int q_idx = 0;
+        for (int t = 0; t < numTravelers; t++) {
+            if (anims[t].state == ANIM_QUEUED && anims[t].queued_at == node) {
+                draw_queued_packet(gPos[node],
+                                   TCOLORS[t % MAX_TRAVELERS],
+                                   q_idx, time);
+                q_idx++;
+            }
+        }
     }
 }
 
@@ -497,10 +584,12 @@ void draw_gui_m4(const Graph* g, Traveler* travelers, int numTravelers)
     InitWindow(WINDOW_W, WINDOW_H, "OS Project — Graph Visualiser M4 (PCB edition)");
     SetTargetFPS(FPS);
     Font font = GetFontDefault();
-    int playing = 0;
+    int   playing = 0;
+    float time    = 0.0f;
 
     while (!WindowShouldClose()) {
         float dt = GetFrameTime();
+        time += dt;
 
         int all_done = 1;
         for (int i = 0; i < numTravelers; i++)
@@ -516,19 +605,19 @@ void draw_gui_m4(const Graph* g, Traveler* travelers, int numTravelers)
             }
         }
 
-        if (playing)
+        if (playing) {
             for (int i = 0; i < numTravelers; i++)
                 if (anims[i].state == ANIM_IDLE)
                     anims[i].state = ANIM_MOVING;
 
-        if (playing)
             for (int i = 0; i < numTravelers; i++)
                 trav_anim_tick(&anims[i], &travelers[i], g, dt);
+        }
 
         BeginDrawing();
         ClearBackground(C_BG);
         draw_background();
-        draw_frame(g, anims, numTravelers, travelers, NULL, NULL, font);
+        draw_frame(g, anims, numTravelers, travelers, NULL, NULL, font, time);
         draw_hud(g, numTravelers, sources, dests, playing, all_done,
                  "OS Project — Graph Visualiser M4");
         draw_button(playing, all_done);
@@ -539,7 +628,7 @@ void draw_gui_m4(const Graph* g, Traveler* travelers, int numTravelers)
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   PUBLIC: MILESTONE 5
+   PUBLIC: MILESTONE 5 & 6
    ═══════════════════════════════════════════════════════════════════ */
 void draw_gui_m5(const Graph* g,
                  int read_fds[], int sources[], int dests[],
@@ -549,10 +638,10 @@ void draw_gui_m5(const Graph* g,
 
     compute_layout(g->numNodes);
 
-    /* ── buffer: collect ALL pipe messages before opening the window ──
-       Children compute and send immediately after forking. We drain all
-       pipes here so nothing is lost, then replay on Play press.         */
-    TravelMessage buf[MAX_TRAVELERS][MAX_NODES * 2 + 2];
+    /* ── drain ALL pipe messages before opening the window ──
+       Children start immediately on fork. Buffer everything so
+       nothing is lost, then replay on Play press.              */
+    TravelMessage buf[MAX_TRAVELERS][MSG_BUF_SIZE];
     int           buf_len[MAX_TRAVELERS];
     memset(buf_len, 0, sizeof(buf_len));
 
@@ -571,7 +660,6 @@ void draw_gui_m5(const Graph* g,
                     if (read_fds[i] > maxfd) maxfd = read_fds[i];
                 }
             }
-            /* block until at least one message arrives */
             if (select(maxfd+1, &rfds, NULL, NULL, NULL) <= 0) break;
 
             for (int i = 0; i < numTravelers; i++) {
@@ -580,8 +668,7 @@ void draw_gui_m5(const Graph* g,
                 ssize_t n = read(read_fds[i], &msg, sizeof(msg));
                 if (n <= 0) { closed[i] = 1; active--; continue; }
 
-                int idx = buf_len[i];
-                if (idx < MAX_NODES * 2 + 2)
+                if (buf_len[i] < MSG_BUF_SIZE)
                     buf[i][buf_len[i]++] = msg;
 
                 if (msg.finished) { closed[i] = 1; active--; }
@@ -592,44 +679,58 @@ void draw_gui_m5(const Graph* g,
     /* ── animation state ── */
     TravAnim anims[MAX_TRAVELERS];
     int cur_node[MAX_TRAVELERS], nxt_node[MAX_TRAVELERS];
-    int buf_pos[MAX_TRAVELERS];   /* replay cursor per traveler */
+    int buf_pos[MAX_TRAVELERS];
+    float next_msg_timer[MAX_TRAVELERS];
+
+    /*
+     * inside_node[i] = the node traveler i is currently occupying
+     * (holding the semaphore). Set when ENTERED is consumed, cleared
+     * when the next ENTERED or DESTINATION is consumed.
+     * This is the ground truth for "is this node occupied?" —
+     * independent of animation state which changes as soon as
+     * the traveler starts moving toward the next node.
+     */
+    int inside_node[MAX_TRAVELERS];
 
     for (int i = 0; i < numTravelers; i++) {
         memset(&anims[i], 0, sizeof(TravAnim));
-        anims[i].state = ANIM_IDLE;
-        anims[i].pos   = gPos[sources[i]];
-        cur_node[i]    = sources[i];
-        nxt_node[i]    = -1;
-        buf_pos[i]     = 0;
+        anims[i].state     = ANIM_IDLE;
+        anims[i].pos       = gPos[sources[i]];
+        anims[i].queued_at = -1;
+        cur_node[i]        = sources[i];
+        nxt_node[i]        = -1;
+        buf_pos[i]         = 0;
+        next_msg_timer[i]  = 0.0f;
+        inside_node[i]     = -1;   /* not inside any node yet */
     }
 
-    int playing  = 0;
-    int all_done = 0;
-
-    /* time until next message replay per traveler */
-    float next_msg_timer[MAX_TRAVELERS];
-    memset(next_msg_timer, 0, sizeof(next_msg_timer));
+    int   playing  = 0;
+    int   all_done = 0;
+    float time     = 0.0f;
 
     SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_HIGHDPI);
-    InitWindow(WINDOW_W, WINDOW_H, "OS Project — Graph Visualiser M5 (PCB edition)");
+    InitWindow(WINDOW_W, WINDOW_H, "OS Project — Graph Visualiser M5/M6 (PCB edition)");
     SetTargetFPS(FPS);
     Font font = GetFontDefault();
 
     while (!WindowShouldClose()) {
         float dt = GetFrameTime();
+        time += dt;
 
         /* ── button ── */
         if (draw_button(playing, all_done)) {
             if (all_done) {
-                /* restart: reset all cursors and anim state */
+                /* restart */
                 for (int i = 0; i < numTravelers; i++) {
                     memset(&anims[i], 0, sizeof(TravAnim));
-                    anims[i].state  = ANIM_IDLE;
-                    anims[i].pos    = gPos[sources[i]];
-                    cur_node[i]     = sources[i];
-                    nxt_node[i]     = -1;
-                    buf_pos[i]      = 0;
-                    next_msg_timer[i] = 0.0f;
+                    anims[i].state     = ANIM_IDLE;
+                    anims[i].pos       = gPos[sources[i]];
+                    anims[i].queued_at = -1;
+                    cur_node[i]        = sources[i];
+                    nxt_node[i]        = -1;
+                    buf_pos[i]         = 0;
+                    next_msg_timer[i]  = 0.0f;
+                    inside_node[i]     = -1;
                 }
                 all_done = 0;
                 playing  = 1;
@@ -640,7 +741,7 @@ void draw_gui_m5(const Graph* g,
 
         if (!playing) goto draw;
 
-        /* ── replay buffered messages at the correct pace ── */
+        /* ── replay buffered messages ── */
         {
             int done_count = 0;
             for (int i = 0; i < numTravelers; i++) {
@@ -648,59 +749,129 @@ void draw_gui_m5(const Graph* g,
 
                 next_msg_timer[i] -= dt;
                 if (next_msg_timer[i] > 0.0f) continue;
+                if (buf_pos[i] >= buf_len[i])  { done_count++; continue; }
 
-                if (buf_pos[i] >= buf_len[i]) { done_count++; continue; }
+                /* ── helper: is 'node' occupied by any OTHER traveler? ──
+                   Uses inside_node[] which reflects semaphore ownership,
+                   not animation state. This correctly blocks even after
+                   the occupant has started moving toward its next node. */
+                #define node_is_occupied(node, skip_i) ({ \
+                    int _occ = 0; \
+                    for (int _j = 0; _j < numTravelers; _j++) { \
+                        if (_j == (skip_i)) continue; \
+                        if (inside_node[_j] == (node)) { _occ = 1; break; } \
+                    } \
+                    _occ; \
+                })
+
+                /* ── if QUEUED, block until node is free AND we are first ──
+                   To avoid two queued travelers entering simultaneously,
+                   also check that no other QUEUED traveler has a lower
+                   buffer position (i.e. arrived earlier). */
+                if (anims[i].state == ANIM_QUEUED) {
+                    int node = anims[i].queued_at;
+
+                    /* still occupied? */
+                    if (node_is_occupied(node, i)) {
+                        next_msg_timer[i] = 0.05f;
+                        continue;
+                    }
+
+                    /* is there another queued traveler at the same node
+                       who arrived earlier (lower buf_pos)? */
+                    int earlier_queued = 0;
+                    for (int j = 0; j < numTravelers; j++) {
+                        if (j == i) continue;
+                        if (anims[j].state == ANIM_QUEUED &&
+                            anims[j].queued_at == node &&
+                            buf_pos[j] < buf_pos[i]) {
+                            earlier_queued = 1; break;
+                        }
+                    }
+                    if (earlier_queued) {
+                        next_msg_timer[i] = 0.05f;
+                        continue;
+                    }
+                }
 
                 TravelMessage* msg = &buf[i][buf_pos[i]++];
+
+                /* Is this the very first message for this traveler? */
+                int is_first = (buf_pos[i] == 1);
 
                 if (msg->finished) {
                     printf("[PID=%d] finished\n", (int)msg->pid);
                     fflush(stdout);
-                    anims[i].state = ANIM_DONE;
+                    anims[i].state     = ANIM_DONE;
+                    anims[i].queued_at = -1;
+                    inside_node[i]     = -1;
                     done_count++;
+
+                } else if (msg->waiting) {
+                    /* ── WAITING: traveler wants to enter a node ──
+                       Only show QUEUED if the node is actually occupied.
+                       If free, skip straight to ENTERED next frame.    */
+                    int node = msg->current_node;
+
+                    int next_is_dest = (buf_pos[i] < buf_len[i] &&
+                                        buf[i][buf_pos[i]].next_node == -1 &&
+                                        !buf[i][buf_pos[i]].waiting);
+
+                    if (!node_is_occupied(node, i) || is_first || next_is_dest) {
+                        /* node is free — skip QUEUED */
+                        anims[i].pos      = gPos[node];
+                        next_msg_timer[i] = 0.0f;
+                    } else {
+                        /* node is occupied — show as queued */
+                        anims[i].state     = ANIM_QUEUED;
+                        anims[i].queued_at = node;
+                        anims[i].pos       = gPos[node];
+                        next_msg_timer[i]  = NODE_WAIT_SEC;
+                    }
+
                 } else if (msg->next_node == -1) {
+                    /* ── DESTINATION reached ── */
                     printf("[PID=%d] arrived at node %d | DESTINATION\n",
                            (int)msg->pid, msg->current_node);
                     fflush(stdout);
-                    anims[i].pos   = gPos[msg->current_node];
-                    anims[i].state = ANIM_DONE;
-                    cur_node[i]    = msg->current_node;
-                    nxt_node[i]    = -1;
+                    anims[i].pos       = gPos[msg->current_node];
+                    anims[i].state     = ANIM_DONE;
+                    anims[i].queued_at = -1;
+                    cur_node[i]        = msg->current_node;
+                    nxt_node[i]        = -1;
+                    inside_node[i]     = -1;   /* released the semaphore */
                     done_count++;
+
                 } else {
+                    /* ── ENTERED node, now moving toward next ── */
                     printf("[PID=%d] arrived at node %d | next node: %d\n",
                            (int)msg->pid, msg->current_node, msg->next_node);
                     fflush(stdout);
-                    cur_node[i]       = msg->current_node;
-                    nxt_node[i]       = msg->next_node;
-                    anims[i].state    = ANIM_MOVING;
-                    anims[i].timer    = 0.0f;
-                    anims[i].pos      = gPos[msg->current_node];
+                    cur_node[i]        = msg->current_node;
+                    nxt_node[i]        = msg->next_node;
+                    anims[i].state     = ANIM_MOVING;
+                    anims[i].timer     = 0.0f;
+                    anims[i].pos       = gPos[msg->current_node];
+                    anims[i].queued_at = -1;
+                    inside_node[i]     = msg->current_node;  /* holds semaphore */
 
-                    /* compute delay until next message = W × HOP_SEC */
-                    int w = 1;
-                    AdjNode* cur = g->adjLists[msg->current_node];
-                    while (cur) {
-                        if (cur->destination == msg->next_node) { w = cur->weight; break; }
-                        cur = cur->next;
-                    }
+                    /* delay until next message = W × HOP_SEC
+                       (this is when the semaphore is released in the child) */
+                    int w = edge_weight(g, msg->current_node, msg->next_node);
                     next_msg_timer[i] = (float)w * HOP_SEC;
                 }
+
+                #undef node_is_occupied
             }
             all_done = (done_count == numTravelers);
         }
 
-        /* ── smooth interpolation between current and next node ── */
+        /* ── smooth interpolation for MOVING travelers ── */
         for (int i = 0; i < numTravelers; i++) {
             if (anims[i].state != ANIM_MOVING || nxt_node[i] < 0) continue;
+
             anims[i].timer += dt;
-            /* travel time for this hop = W × HOP_SEC */
-            int w = 1;
-            AdjNode* cur = g->adjLists[cur_node[i]];
-            while (cur) {
-                if (cur->destination == nxt_node[i]) { w = cur->weight; break; }
-                cur = cur->next;
-            }
+            int w = edge_weight(g, cur_node[i], nxt_node[i]);
             float hop_dur = (float)w * HOP_SEC;
             float t = anims[i].timer / hop_dur;
             if (t > 1.0f) t = 1.0f;
@@ -716,9 +887,9 @@ void draw_gui_m5(const Graph* g,
         BeginDrawing();
         ClearBackground(C_BG);
         draw_background();
-        draw_frame(g, anims, numTravelers, NULL, cur_node, nxt_node, font);
+        draw_frame(g, anims, numTravelers, NULL, cur_node, nxt_node, font, time);
         draw_hud(g, numTravelers, sources, dests, playing, all_done,
-                 "OS Project — Graph Visualiser M5");
+                 "OS Project — Graph Visualiser M5/M6");
         draw_button(playing, all_done);
         EndDrawing();
     }
