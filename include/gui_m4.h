@@ -7,9 +7,15 @@
 
 #include "graph.h"
 #include "travelers.h"
+#include "scheduler.h"
 
 /* Milestone 4: path-driven animation */
 void draw_gui_m4(const Graph* g, Traveler* travelers, int numTravelers);
+
+/* Milestone 7: replay an FCFS-scheduled timeline of events */
+void draw_gui_m7(const Graph* g, SimEvent* events, int numEvents,
+                 int sources[], int dests[], int numTravelers,
+                 const char* algoName);
 
 /*
  * Milestone 5 / 6: live pipe-driven animation.

@@ -22,6 +22,7 @@
 #include "../include/graph.h"
 #include "../include/travelers.h"
 #include "../include/ipc.h"
+#include "../include/scheduler.h"   /* SimEvent for draw_gui_m7 */
 
 /* ═══════════════════════════════════════════════════════════════════
    CONSTANTS
@@ -890,6 +891,187 @@ void draw_gui_m5(const Graph* g,
         draw_frame(g, anims, numTravelers, NULL, cur_node, nxt_node, font, time);
         draw_hud(g, numTravelers, sources, dests, playing, all_done,
                  "OS Project — Graph Visualiser M5/M6");
+        draw_button(playing, all_done);
+        EndDrawing();
+    }
+
+    CloseWindow();
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   PUBLIC: MILESTONE 7 — replay an FCFS-scheduled timeline
+   --------------------------------------------------------------------
+   The parent (scheduler.c) already ran the real, FCFS-scheduled
+   simulation and handed us a list of timed events. Here we just play
+   that list back on a single clock so the ordering — including
+   travelers waiting outside a busy node — is shown exactly as it
+   happened.
+   ═══════════════════════════════════════════════════════════════════ */
+typedef enum { RS_IDLE, RS_WAIT, RS_INSIDE, RS_MOVING, RS_DONE } RState;
+
+/* put every traveler back to its starting node */
+static void m7_reset(RState state[], int atNode[], int fromN[], int toN[],
+                     float moveStart[], Vector2 pos[], int sources[], int n)
+{
+    for (int i = 0; i < n; i++) {
+        state[i]     = RS_IDLE;
+        atNode[i]    = sources[i];
+        fromN[i]     = sources[i];
+        toN[i]       = sources[i];
+        moveStart[i] = 0.0f;
+        pos[i]       = gPos[sources[i]];
+    }
+}
+
+/* apply one timeline event to the render state */
+static void m7_apply(SimEvent e, RState state[], int atNode[],
+                     int fromN[], int toN[], float moveStart[], Vector2 pos[])
+{
+    int t = e.traveler;
+    switch (e.type) {
+        case EV_WAIT:                       /* arrived, queued outside node */
+            state[t]  = RS_WAIT;
+            atNode[t] = e.node;
+            pos[t]    = gPos[e.node];
+            break;
+        case EV_ENTER:                      /* admitted into the node       */
+            state[t]  = RS_INSIDE;
+            atNode[t] = e.node;
+            pos[t]    = gPos[e.node];
+            break;
+        case EV_LEAVE:                      /* leaving, travel to next node  */
+            if (e.next != -1) {
+                state[t]     = RS_MOVING;
+                fromN[t]     = e.node;
+                toN[t]       = e.next;
+                moveStart[t] = e.t;
+            }
+            break;
+        case EV_FINISH:
+            state[t] = RS_DONE;
+            break;
+    }
+}
+
+void draw_gui_m7(const Graph* g, SimEvent* events, int numEvents,
+                 int sources[], int dests[], int numTravelers,
+                 const char* algoName)
+{
+    if (!g || numTravelers <= 0) return;
+    compute_layout(g->numNodes);
+
+    RState  state[MAX_TRAVELERS];
+    int     atNode[MAX_TRAVELERS];
+    int     fromN[MAX_TRAVELERS], toN[MAX_TRAVELERS];
+    float   moveStart[MAX_TRAVELERS];
+    Vector2 pos[MAX_TRAVELERS];
+
+    m7_reset(state, atNode, fromN, toN, moveStart, pos, sources, numTravelers);
+
+    int   evIdx    = 0;
+    float now      = 0.0f;
+    int   playing  = 0;
+    int   all_done = (numEvents == 0);
+
+    SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_HIGHDPI);
+    InitWindow(WINDOW_W, WINDOW_H, "OS Project — Graph Visualiser M7 (FCFS)");
+    SetTargetFPS(FPS);
+    Font font = GetFontDefault();
+
+    while (!WindowShouldClose()) {
+        float dt = GetFrameTime();
+
+        /* button: Play / Stop / Restart */
+        if (draw_button(playing, all_done)) {
+            if (all_done) {
+                m7_reset(state, atNode, fromN, toN, moveStart, pos,
+                         sources, numTravelers);
+                evIdx = 0; now = 0.0f; all_done = 0; playing = 1;
+            } else {
+                playing = !playing;
+            }
+        }
+
+        if (playing) {
+            now += dt;
+            while (evIdx < numEvents && events[evIdx].t <= now) {
+                m7_apply(events[evIdx], state, atNode, fromN, toN,
+                         moveStart, pos);
+                evIdx++;
+            }
+            /* interpolate packets that are moving along an edge */
+            for (int i = 0; i < numTravelers; i++) {
+                if (state[i] != RS_MOVING) continue;
+                int   w   = edge_weight(g, fromN[i], toN[i]);
+                float dur = (float)w * HOP_SEC;
+                float tt  = (dur > 0.0f) ? (now - moveStart[i]) / dur : 1.0f;
+                if (tt > 1.0f) tt = 1.0f;
+                Vector2 a = gPos[fromN[i]], b = gPos[toN[i]];
+                pos[i] = (Vector2){ a.x + (b.x - a.x) * tt,
+                                    a.y + (b.y - a.y) * tt };
+            }
+            if (evIdx >= numEvents) all_done = 1;
+        }
+
+        BeginDrawing();
+        ClearBackground(C_BG);
+        draw_background();
+
+        /* edges + weights */
+        for (int i = 0; i < g->numEdges; i++) {
+            int u = g->edges[i].source, v = g->edges[i].destination;
+            draw_arrow(gPos[u], gPos[v], 0, C_CHIP_BORDER);
+            draw_weight_label(gPos[u], gPos[v], g->edges[i].weight, font);
+        }
+
+        /* chips — colour the chip of whoever is INSIDE it */
+        for (int node = 0; node < g->numNodes; node++) {
+            int   useCol = 0;
+            Color col    = C_CHIP_BORDER;
+            for (int i = 0; i < numTravelers; i++)
+                if (state[i] == RS_INSIDE && atNode[i] == node) {
+                    col = TCOLORS[i % MAX_TRAVELERS];
+                    useCol = 1;
+                    break;
+                }
+            draw_cpu(gPos[node], node, col, useCol, font);
+        }
+
+        /* waiting packets — stacked just outside their node */
+        for (int node = 0; node < g->numNodes; node++) {
+            float   cx = WINDOW_W / 2.0f, cy = WINDOW_H / 2.0f;
+            Vector2 d  = { gPos[node].x - cx, gPos[node].y - cy };
+            float   dl = sqrtf(d.x * d.x + d.y * d.y);
+            if (dl < 1.0f) { d.x = 0; d.y = -1; dl = 1; }
+            d.x /= dl; d.y /= dl;
+
+            int slot = 0;
+            for (int i = 0; i < numTravelers; i++) {
+                if (state[i] != RS_WAIT || atNode[i] != node) continue;
+                float off = CHIP_HALF + LEG_LEN + 20.0f + slot * 24.0f;
+                Vector2 wp = { gPos[node].x + d.x * off,
+                               gPos[node].y + d.y * off };
+                /* hollow ring = "waiting outside" */
+                DrawCircleLines((int)wp.x, (int)wp.y, ENTITY_R + 3,
+                                TCOLORS[i % MAX_TRAVELERS]);
+                draw_packet(wp, TCOLORS[i % MAX_TRAVELERS]);
+                slot++;
+            }
+        }
+
+        /* moving + inside packets */
+        for (int i = 0; i < numTravelers; i++)
+            if (state[i] == RS_MOVING || state[i] == RS_INSIDE)
+                draw_packet(pos[i], TCOLORS[i % MAX_TRAVELERS]);
+
+        draw_hud(g, numTravelers, sources, dests, playing, all_done,
+                 "OS Project — Graph Visualiser M7");
+
+        /* show which scheduler is running (milestone 7 requirement) */
+        char algo[48];
+        snprintf(algo, sizeof(algo), "Scheduler: %s", algoName);
+        DrawText(algo, 16, 58, 16, C_WEIGHT);
+
         draw_button(playing, all_done);
         EndDrawing();
     }

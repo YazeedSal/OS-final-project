@@ -32,7 +32,7 @@ This project simulates movement across a directed graph, where multiple "passeng
 | 4 | Multiple processes & parent process | ✅ Done |
 | 5 | Inter-process communication (IPC) | ✅ Done |
 | 6 | Synchronization | ✅ Done |
-| 7 | Scheduling algorithms | ⏳ Pending |
+| 7 | Scheduling algorithms (FCFS) | ✅ Done |
 
 Each milestone is tagged in Git using the format `milestone1`, `milestone2`, etc.
 
@@ -69,6 +69,33 @@ Adds a critical section constraint: **at most one traveler can be inside a node 
 **Synchronization mechanism: POSIX named semaphores** (`sem_open`) — one semaphore per node, initialised to 1 (binary semaphore). `sync_enter_node()` calls `sem_wait()` which blocks if the node is occupied. `sync_leave_node()` calls `sem_post()` to release it. Semaphores are named using the parent PID to avoid collisions between concurrent runs.
 
 Each child now sends two pipe messages per node: a **WAITING** message before calling `sem_wait()` (so the GUI can show the traveler queued outside), and an **ENTERED** message after acquiring the semaphore (so the GUI shows the traveler inside). The GUI renders queued travelers as dim pulsing rings offset around the node, distinct from the solid moving packets.
+
+### Milestone 7 — Scheduling Algorithms (FCFS)
+Replaces the OS-decided ("random") node-entry order of milestone 6 with an explicit scheduler. The algorithm is chosen on the command line:
+
+```bash
+./sim -schd fcfs tests/input_m7.txt
+```
+
+**How it works.** The parent forks one child per traveler; each child computes its own Dijkstra path. Before a child enters *any* node it sends an `ENTER` request to the parent through a shared **request pipe** and then **blocks** on its own **grant pipe** until the parent wakes it. The parent is the scheduler: it keeps **one waiting queue per node** and lets in only one traveler at a time. When the occupant sends `LEAVE`, the parent admits the next traveler and writes a byte to that child's grant pipe to wake it.
+
+**The FCFS policy** lives entirely in `scheduler.c`, in two lines:
+- `sched_enqueue()` — a newly-waiting traveler joins the **back** of the node's queue (First-Come).
+- `sched_try_admit()` — when the node is free, the traveler at the **front** is admitted (First-Served).
+
+Swapping in a second algorithm (e.g. SJF) later means changing only which element `sched_try_admit()` removes — nothing else.
+
+The parent prints a live FCFS log and records a timeline of events; the GUI then replays that timeline so you can watch travelers pile up outside a busy node and enter one-by-one in arrival order. The on-screen HUD shows `Scheduler: FCFS`.
+
+```
+[FCFS] T0 (pid=1234) waiting for node 0
+[FCFS] T0 entered node 0
+[FCFS] T1 (pid=1235) waiting for node 0     <- T1 arrives, must wait
+[FCFS] T0 left node 0
+[FCFS] T1 entered node 0                     <- admitted in arrival order
+```
+
+**Effect on waiting times.** Under FCFS, travelers are served strictly in the order they reach a contended node, so no traveler is ever overtaken — there is no starvation, but a slow/long traveler at the front can hold up shorter ones behind it (this is the classic FCFS convoy effect, and the contrast a future SJF scheduler would address).
 
 ---
 
@@ -151,6 +178,14 @@ Lines starting with `#` are ignored.
 make milestone6
 ./sim tests/input_m6.txt
 ```
+
+### Milestone 7
+```bash
+make milestone7
+./sim -schd fcfs tests/input_m7.txt
+```
+Same input format as milestones 4–6 (graph, then `K` travelers). `-schd fcfs`
+selects the First-Come-First-Served node scheduler.
 
 ### Clean
 ```bash

@@ -4,7 +4,7 @@ LIBS   = -lraylib -lm
 SRC    = src
 INC    = include
 
-.PHONY: milestone1 milestone2 milestone3 milestone4 milestone5 milestone6 clean
+.PHONY: milestone1 milestone2 milestone3 milestone4 milestone5 milestone6 milestone7 clean
 
 milestone1:
 	$(CC) $(CFLAGS) $(SRC)/main_m1.c $(SRC)/graph.c $(SRC)/dijkstra.c \
@@ -40,6 +40,13 @@ milestone6:
 	    $(SRC)/sync.c $(SRC)/gui_m4.c \
 	    -I$(INC) -o sim $(LIBS) -lpthread
 	@echo "Built milestone 6 -> ./sim"
+
+milestone7:
+	$(CC) $(CFLAGS) -DMILESTONE7 $(SRC)/main_m7.c $(SRC)/graph.c \
+	    $(SRC)/dijkstra.c $(SRC)/travelers.c $(SRC)/scheduler.c \
+	    $(SRC)/gui_m4.c \
+	    -I$(INC) -o sim $(LIBS)
+	@echo "Built milestone 7 -> ./sim"
 
 clean:
 	rm -f dijkstra sim
