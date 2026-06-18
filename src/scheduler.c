@@ -1,13 +1,15 @@
 /*
- * scheduler.c — Milestone 7: FCFS scheduling (the core of the mission).
+ * scheduler.c — Milestone 7: FCFS + SJF scheduling (the core of the mission).
  *
  * Two parts live here:
- *   1. The FCFS policy itself — one waiting queue per node. Only one traveler
- *      may be inside a node at a time. FCFS = join the queue at the back,
- *      get let in from the front.
+ *   1. The scheduling policy — one waiting queue per node. Only one traveler
+ *      may be inside a node at a time.
+ *        FCFS = join the queue at the back, get let in from the front.
+ *        SJF  = join the queue, the traveler with the shortest total path
+ *               cost is let in first.
  *   2. The simulation that uses it — the parent forks one child per traveler,
  *      every child asks before entering a node and BLOCKS until the parent
- *      wakes it, and the parent grants access in FCFS order.
+ *      wakes it, and the parent grants access in the chosen order.
  *
  * The parent records a timeline of events (wait / enter / leave / finish) so
  * the GUI in gui_m4.c can replay the run afterwards.
@@ -26,35 +28,57 @@
 #define MAX_EVENTS   (MAX_TRAVELERS * (MAX_NODES * 3 + 2))
 
 /* ═══════════════════════════════════════════════════════════════════
-   PART 1 — the FCFS queues
+   PART 1 — the scheduling queues (FCFS + SJF)
    ═══════════════════════════════════════════════════════════════════ */
 static int occupant[MAX_NODES];                 /* traveler inside, or -1    */
-static int queue[MAX_NODES][MAX_TRAVELERS];     /* FIFO of waiting travelers */
+static int queue[MAX_NODES][MAX_TRAVELERS];     /* waiting travelers         */
 static int qlen[MAX_NODES];                     /* how many are waiting      */
 
-static void sched_init(int num_nodes)
+static SchedAlgo current_algo;                  /* which policy is active    */
+static int       path_cost[MAX_TRAVELERS];      /* total Dijkstra cost per traveler (SJF) */
+
+static void sched_init(int num_nodes, SchedAlgo algo, const int costs[], int K)
 {
+    current_algo = algo;
+    for (int i = 0; i < K && i < MAX_TRAVELERS; i++)
+        path_cost[i] = costs ? costs[i] : 0;
     for (int i = 0; i < num_nodes; i++) {
         occupant[i] = -1;
         qlen[i]     = 0;
     }
 }
 
-/* First-Come: a newly-waiting traveler joins the BACK of the line. */
+/* A newly-waiting traveler joins the BACK of the line (both policies). */
 static void sched_enqueue(int node, int traveler)
 {
     if (qlen[node] < MAX_TRAVELERS)
         queue[node][qlen[node]++] = traveler;
 }
 
-/* First-Served: if the node is free, admit whoever is at the FRONT. */
+/*
+ * Admit one traveler from the queue:
+ *   FCFS — pick whoever is at the FRONT.
+ *   SJF  — pick whoever has the shortest total path cost.
+ */
 static int sched_try_admit(int node)
 {
     if (occupant[node] != -1) return -1;   /* node is busy   */
     if (qlen[node] == 0)      return -1;   /* nobody waiting */
 
-    int t = queue[node][0];                /* head of the line      */
-    for (int i = 1; i < qlen[node]; i++)   /* shift everyone up one */
+    int pick = 0;                          /* index inside queue[node][] */
+
+    if (current_algo == SCHED_SJF) {
+        /* scan for the traveler with the lowest path cost */
+        for (int i = 1; i < qlen[node]; i++) {
+            if (path_cost[queue[node][i]] < path_cost[queue[node][pick]])
+                pick = i;
+        }
+    }
+    /* else FCFS: pick stays 0 (the front of the line) */
+
+    int t = queue[node][pick];
+    /* remove the chosen element and shift the rest */
+    for (int i = pick + 1; i < qlen[node]; i++)
         queue[node][i - 1] = queue[node][i];
     qlen[node]--;
 
@@ -130,14 +154,15 @@ static void child_run(int idx, int src, int dst, Graph* g,
     _exit(0);   /* _exit (not exit) so we don't flush the parent's stdio buffer */
 }
 
-/* admit the head of a node's queue (if any) and wake that child */
+/* admit the best candidate from a node's queue (if any) and wake that child */
 static void admit_and_wake(int node, int grant_wfd[], int next_of[],
-                           SimEvent* ev, int* n, struct timespec start)
+                           SimEvent* ev, int* n, struct timespec start,
+                           const char* tag)
 {
     int t = sched_try_admit(node);
     if (t == -1) return;
 
-    printf("[FCFS] T%d entered node %d\n", t, node);
+    printf("[%s] T%d entered node %d\n", tag, t, node);
     ev[(*n)++] = (SimEvent){ secs_since(start), t, EV_ENTER, node, next_of[t] };
 
     int go = 1;
@@ -145,10 +170,24 @@ static void admit_and_wake(int node, int grant_wfd[], int next_of[],
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   PART 4 — the parent: run the FCFS scheduler, return the timeline
+   PART 4 — the parent: run the scheduler, return the timeline
    ═══════════════════════════════════════════════════════════════════ */
-SimEvent* run_scheduled_sim(Graph* g, Traveler* tr, int K, int* outN)
+SimEvent* run_scheduled_sim(Graph* g, Traveler* tr, int K, int* outN,
+                            SchedAlgo algo)
 {
+    const char* tag = (algo == SCHED_SJF) ? "SJF" : "FCFS";
+
+    /* ── pre-compute each traveler's total path cost (needed for SJF) ── */
+    int costs[MAX_TRAVELERS];
+    for (int i = 0; i < K; i++) {
+        g->source      = tr[i].source;
+        g->destination = tr[i].destination;
+        int tmpPath[MAX_NODES], tmpLen = 0;
+        int c = dijkstra_path(g, tmpPath, &tmpLen);
+        costs[i] = (c >= 0) ? c : 999999;
+        printf("[%s] T%d path cost = %d\n", tag, i, costs[i]);
+    }
+
     int   req_pipe[2];
     int   grant[MAX_TRAVELERS][2];
     int   grant_wfd[MAX_TRAVELERS];
@@ -189,7 +228,7 @@ SimEvent* run_scheduled_sim(Graph* g, Traveler* tr, int K, int* outN)
     int next_of[MAX_TRAVELERS];           /* 'next' from each child's ENTER */
     for (int i = 0; i < K; i++) next_of[i] = -1;
 
-    sched_init(g->numNodes);
+    sched_init(g->numNodes, algo, costs, K);
 
     struct timespec start;
     clock_gettime(CLOCK_MONOTONIC, &start);
@@ -203,22 +242,22 @@ SimEvent* run_scheduled_sim(Graph* g, Traveler* tr, int K, int* outN)
 
         if (msg.type == REQ_ENTER) {
             next_of[msg.traveler] = msg.next;
-            printf("[FCFS] T%d (pid=%d) waiting for node %d\n",
-                   msg.traveler, (int)msg.pid, msg.node);
+            printf("[%s] T%d (pid=%d) waiting for node %d\n",
+                   tag, msg.traveler, (int)msg.pid, msg.node);
             ev[n++] = (SimEvent){ t, msg.traveler, EV_WAIT, msg.node, msg.next };
 
             sched_enqueue(msg.node, msg.traveler);
-            admit_and_wake(msg.node, grant_wfd, next_of, ev, &n, start);
+            admit_and_wake(msg.node, grant_wfd, next_of, ev, &n, start, tag);
         }
         else if (msg.type == REQ_LEAVE) {
-            printf("[FCFS] T%d left node %d\n", msg.traveler, msg.node);
+            printf("[%s] T%d left node %d\n", tag, msg.traveler, msg.node);
             ev[n++] = (SimEvent){ t, msg.traveler, EV_LEAVE, msg.node, msg.next };
 
             sched_release(msg.node);
-            admit_and_wake(msg.node, grant_wfd, next_of, ev, &n, start);
+            admit_and_wake(msg.node, grant_wfd, next_of, ev, &n, start, tag);
         }
         else { /* REQ_FINISH */
-            printf("[FCFS] T%d finished\n", msg.traveler);
+            printf("[%s] T%d finished\n", tag, msg.traveler);
             ev[n++] = (SimEvent){ t, msg.traveler, EV_FINISH, -1, -1 };
             active--;
         }

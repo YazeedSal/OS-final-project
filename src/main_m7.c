@@ -50,8 +50,11 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    if (strcmp(algo, "fcfs") != 0) {
-        fprintf(stderr, "Error: only 'fcfs' is implemented (got '%s').\n", algo);
+    SchedAlgo sched;
+    if (strcmp(algo, "fcfs") == 0)      sched = SCHED_FCFS;
+    else if (strcmp(algo, "sjf") == 0)  sched = SCHED_SJF;
+    else {
+        fprintf(stderr, "Error: unknown algorithm '%s' (use 'fcfs' or 'sjf').\n", algo);
         return 1;
     }
 
@@ -71,20 +74,22 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    printf("Scheduler: FCFS  |  nodes: %d  edges: %d  travelers: %d\n",
-           g.numNodes, g.numEdges, K);
+    const char* algoName = (sched == SCHED_SJF) ? "SJF" : "FCFS";
+    printf("Scheduler: %s  |  nodes: %d  edges: %d  travelers: %d\n",
+           algoName, g.numNodes, g.numEdges, K);
 
     int numEvents = 0;
-    SimEvent* events = run_scheduled_sim(&g, tr, K, &numEvents);
+    SimEvent* events = run_scheduled_sim(&g, tr, K, &numEvents, sched);
 
 
+#ifndef NO_GUI
     {
         int sources[MAX_TRAVELERS], dests[MAX_TRAVELERS];
         for (int i = 0; i < K; i++) {
             sources[i] = tr[i].source;
             dests[i]   = tr[i].destination;
         }
-        draw_gui_m7(&g, events, numEvents, sources, dests, K, "FCFS");
+        draw_gui_m7(&g, events, numEvents, sources, dests, K, algoName);
     }
 #endif
 

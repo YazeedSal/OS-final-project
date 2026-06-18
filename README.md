@@ -183,9 +183,11 @@ make milestone6
 ```bash
 make milestone7
 ./sim -schd fcfs tests/input_m7.txt
+./sim -schd sjf  tests/input_m7.txt
 ```
 Same input format as milestones 4–6 (graph, then `K` travelers). `-schd fcfs`
-selects the First-Come-First-Served node scheduler.
+selects First-Come-First-Served, `-schd sjf` selects Shortest-Job-First
+(the traveler with the lowest total path cost is admitted first).
 
 ### Clean
 ```bash

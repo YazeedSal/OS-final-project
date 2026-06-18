@@ -6,20 +6,25 @@
 #include "travelers.h"    /* Traveler                        */
 
 /*
- * Milestone 7 — FCFS scheduling of node access.
+ * Milestone 7 — FCFS and SJF scheduling of node access.
  *
  * When several travelers want to enter the same node, the parent decides
- * the order. The whole policy is "First Come, First Served":
- *   - a traveler that starts waiting joins the BACK of the node's queue
- *   - when the node becomes free, the traveler at the FRONT is let in
+ * the order.
  *
- * To add a second algorithm later (e.g. SJF) you only change which element
- * sched_try_admit() picks from the queue — nothing else moves.
+ *   FCFS (First Come, First Served):
+ *     - a traveler that starts waiting joins the BACK of the node's queue
+ *     - when the node becomes free, the traveler at the FRONT is let in
  *
- * This file is the heart of the milestone: scheduler.c holds both the FCFS
- * queue and the whole process/IPC simulation. main_m7.c only feeds it a
- * graph + travelers and shows the result.
+ *   SJF (Shortest Job First):
+ *     - a traveler that starts waiting joins the queue
+ *     - when the node becomes free, the traveler with the shortest total
+ *       path cost (computed by Dijkstra before the simulation) is let in
+ *
+ * The only difference is which element sched_try_admit() picks from the
+ * queue — nothing else moves.
  */
+
+typedef enum { SCHED_FCFS, SCHED_SJF } SchedAlgo;
 
 /* ───── message a child sends to the parent through the request pipe ───── */
 enum { REQ_ENTER, REQ_LEAVE, REQ_FINISH };
@@ -44,13 +49,14 @@ typedef struct {
 } SimEvent;
 
 /*
- * Run the whole FCFS-scheduled simulation:
+ * Run the scheduled simulation with the chosen algorithm:
  *   - forks one child process per traveler (each computes its own path),
- *   - schedules node access First-Come-First-Served,
- *   - prints an FCFS log to the terminal,
+ *   - schedules node access using FCFS or SJF,
+ *   - prints a log to the terminal,
  *   - returns a malloc'd array of recorded events (caller frees it) and
  *     writes the number of events into *outN.
  */
-SimEvent* run_scheduled_sim(Graph* g, Traveler* travelers, int K, int* outN);
+SimEvent* run_scheduled_sim(Graph* g, Traveler* travelers, int K, int* outN,
+                            SchedAlgo algo);
 
 #endif

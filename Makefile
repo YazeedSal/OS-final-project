@@ -1,6 +1,6 @@
 CC     = gcc
 CFLAGS = -Wall -Wextra -g
-LIBS   = -lraylib -lm
+LIBS   = -lraylib -lm -lX11
 SRC    = src
 INC    = include
 
