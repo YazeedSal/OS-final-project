@@ -20,6 +20,7 @@
 #include <unistd.h>
 #include <time.h>
 #include <sys/wait.h>
+#include <poll.h>
 
 #include "../include/scheduler.h"
 #include "../include/dijkstra.h"
@@ -238,29 +239,51 @@ SimEvent* run_scheduled_sim(Graph* g, Traveler* tr, int K, int* outN,
     while (active > 0 &&
            read(req_pipe[0], &msg, sizeof(msg)) == (ssize_t)sizeof(msg)) {
 
-        float t = secs_since(start);
+        /* ── batch: drain all immediately-available messages first,
+              THEN do admissions.  This lets SJF compare travelers
+              that request the same node at nearly the same time. ── */
+        int needs_admit[MAX_NODES] = {0};
 
-        if (msg.type == REQ_ENTER) {
-            next_of[msg.traveler] = msg.next;
-            printf("[%s] T%d (pid=%d) waiting for node %d\n",
-                   tag, msg.traveler, (int)msg.pid, msg.node);
-            ev[n++] = (SimEvent){ t, msg.traveler, EV_WAIT, msg.node, msg.next };
+        for (;;) {
+            float t = secs_since(start);
 
-            sched_enqueue(msg.node, msg.traveler);
-            admit_and_wake(msg.node, grant_wfd, next_of, ev, &n, start, tag);
-        }
-        else if (msg.type == REQ_LEAVE) {
-            printf("[%s] T%d left node %d\n", tag, msg.traveler, msg.node);
-            ev[n++] = (SimEvent){ t, msg.traveler, EV_LEAVE, msg.node, msg.next };
+            if (msg.type == REQ_ENTER) {
+                next_of[msg.traveler] = msg.next;
+                printf("[%s] T%d (pid=%d) waiting for node %d\n",
+                       tag, msg.traveler, (int)msg.pid, msg.node);
+                ev[n++] = (SimEvent){ t, msg.traveler, EV_WAIT, msg.node, msg.next };
 
-            sched_release(msg.node);
-            admit_and_wake(msg.node, grant_wfd, next_of, ev, &n, start, tag);
+                sched_enqueue(msg.node, msg.traveler);
+                needs_admit[msg.node] = 1;
+            }
+            else if (msg.type == REQ_LEAVE) {
+                printf("[%s] T%d left node %d\n", tag, msg.traveler, msg.node);
+                ev[n++] = (SimEvent){ t, msg.traveler, EV_LEAVE, msg.node, msg.next };
+
+                sched_release(msg.node);
+                needs_admit[msg.node] = 1;
+            }
+            else { /* REQ_FINISH */
+                printf("[%s] T%d finished\n", tag, msg.traveler);
+                ev[n++] = (SimEvent){ t, msg.traveler, EV_FINISH, -1, -1 };
+                active--;
+            }
+
+            /* try to grab another message (wait up to 2 ms for
+               stragglers — children forked at the same instant may
+               reach their first write() a few µs apart) */
+            struct pollfd pfd = { .fd = req_pipe[0], .events = POLLIN };
+            if (poll(&pfd, 1, 2) > 0 && (pfd.revents & POLLIN)) {
+                if (read(req_pipe[0], &msg, sizeof(msg)) == (ssize_t)sizeof(msg))
+                    continue;
+            }
+            break;
         }
-        else { /* REQ_FINISH */
-            printf("[%s] T%d finished\n", tag, msg.traveler);
-            ev[n++] = (SimEvent){ t, msg.traveler, EV_FINISH, -1, -1 };
-            active--;
-        }
+
+        /* now admit the best candidate from every affected node */
+        for (int nd = 0; nd < g->numNodes; nd++)
+            if (needs_admit[nd])
+                admit_and_wake(nd, grant_wfd, next_of, ev, &n, start, tag);
 
         if (n > MAX_EVENTS - 4) break;    /* safety guard */
     }
