@@ -104,25 +104,20 @@ The parent prints a live FCFS log and records a timeline of events; the GUI then
 ```
 os-simulation-project/
 ├── src/                  # All .c source files
-│   ├── main.c            # Entry point (handles all milestones)
+│   ├── main.c            # Entry point
 │   ├── graph.c           # Graph data structures and file reading
 │   ├── dijkstra.c        # Dijkstra's shortest path implementation
-│   ├── gui.c             # GUI for milestones 4 & 5 (draw_gui_m4, draw_gui_m5)
-│   ├── gui_m23.c         # GUI for milestones 2 & 3
-│   ├── travelers.c       # Traveler struct, fork, kill, wait, path computation
-│   ├── ipc.c             # Child travel logic with pipe-based IPC (milestone 5)
-│   └── sync.c            # POSIX named semaphore per node (milestone 6)
+│   ├── gui.c             # GUI 
+├── travelers.c       # Traveler struct, fork, kill, wait, path computation
+│
 ├── include/              # All .h header files
 │   ├── graph.h           # Graph struct and function declarations
 │   ├── dijkstra.h        # Dijkstra function declarations
 │   ├── gui.h             # GUI function declarations (M4 & M5)
-│   ├── travelers.h       # Traveler struct and function declarations
-│   ├── ipc.h             # TravelMessage struct and child_travel declaration
-│   ├── sync.h            # sync_init/destroy/enter/leave declarations (milestone 6)
+│   ├── travelers.h       # Traveler struct and function declarations 
 │   └── skip_comments.h   # Shared inline helper for skipping # comment lines
 ├── tests/                # Input/output test cases
-│   ├── input1.txt        # Sample input for milestones 1–3
-│   └── input_m5.txt      # Sample input for milestones 4–5
+│   └── input_ched_race.txt      # Sample input
 ├── CMakeLists.txt        # CMake build configuration
 ├── Makefile              # Build configuration
 ├── .gitignore
@@ -182,8 +177,8 @@ make milestone6
 ### Milestone 7
 ```bash
 make milestone7
-./sim -schd fcfs tests/input_m7.txt
-./sim -schd sjf  tests/input_m7.txt
+./sim -schd fcfs tests/input_sched_race.txt
+./sim -schd sjf  tests/input_sched_race.txt
 ```
 Same input format as milestones 4–6 (graph, then `K` travelers). `-schd fcfs`
 selects First-Come-First-Served, `-schd sjf` selects Shortest-Job-First
