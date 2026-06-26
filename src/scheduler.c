@@ -37,12 +37,15 @@ static int qlen[MAX_NODES];                     /* how many are waiting      */
 
 static SchedAlgo current_algo;                  /* which policy is active    */
 static int       path_cost[MAX_TRAVELERS];      /* total Dijkstra cost per traveler (SJF) */
+static int       sched_priority[MAX_TRAVELERS];
 
 static void sched_init(int num_nodes, SchedAlgo algo, const int costs[], int K)
 {
     current_algo = algo;
     for (int i = 0; i < K && i < MAX_TRAVELERS; i++)
         path_cost[i] = costs ? costs[i] : 0;
+    for (int i = 0; i < K && i < MAX_TRAVELERS; i++)
+        sched_priority[i] = K - i;   /* traveler 0 gets highest priority */
     for (int i = 0; i < num_nodes; i++) {
         occupant[i] = -1;
         qlen[i]     = 0;
@@ -72,6 +75,13 @@ static int sched_try_admit(int node)
         /* scan for the traveler with the lowest path cost */
         for (int i = 1; i < qlen[node]; i++) {
             if (path_cost[queue[node][i]] < path_cost[queue[node][pick]])
+                pick = i;
+        }
+    }
+    else if (current_algo == SCHED_PRIORITY) {
+        /* scan for the traveler with the HIGHEST priority */
+        for (int i = 1; i < qlen[node]; i++) {
+            if (sched_priority[queue[node][i]] > sched_priority[queue[node][pick]])
                 pick = i;
         }
     }
@@ -176,7 +186,9 @@ static void admit_and_wake(int node, int grant_wfd[], int next_of[],
 SimEvent* run_scheduled_sim(Graph* g, Traveler* tr, int K, int* outN,
                             SchedAlgo algo)
 {
-    const char* tag = (algo == SCHED_SJF) ? "SJF" : "FCFS";
+    const char* tag = (algo == SCHED_SJF)      ? "SJF"
+                    : (algo == SCHED_PRIORITY) ? "PRIORITY"
+                    : "FCFS";
 
     /* ── pre-compute each traveler's total path cost (needed for SJF) ── */
     int costs[MAX_TRAVELERS];
@@ -187,6 +199,7 @@ SimEvent* run_scheduled_sim(Graph* g, Traveler* tr, int K, int* outN,
         int c = dijkstra_path(g, tmpPath, &tmpLen);
         costs[i] = (c >= 0) ? c : 999999;
         printf("[%s] T%d path cost = %d\n", tag, i, costs[i]);
+        printf("[%s] T%d priority = %d\n", tag, i, K - i);
     }
 
     int   req_pipe[2];

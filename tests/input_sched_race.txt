@@ -1,55 +1,46 @@
 # ════════════════════════════════════════════════════════════════════
-#  RACE-CONDITION test  —  FCFS vs SJF  (Milestone 7)
+#  PRIORITY-SCHEDULING test  —  Milestone 7  (Task D)
 # ════════════════════════════════════════════════════════════════════
 #
 #  HOW TO RUN
-#     ./sim -schd fcfs tests/input_sched_race.txt
-#     ./sim -schd sjf  tests/input_sched_race.txt
+#     ./sim -schd priority tests/input_sched_priority.txt
+#     ./sim -schd sjf      tests/input_sched_priority.txt   (to compare)
+#     ./sim -schd fcfs     tests/input_sched_priority.txt   (to compare)
 #
-#  WHAT THIS TESTS
-#     This is the real mutual-exclusion / race test:  7 travelers start on
-#     7 DIFFERENT nodes (1..7), so nobody fights at the start.  Every start
-#     node is the SAME distance (weight 1) from the central node 0, so all
-#     7 travelers arrive at node 0 AT THE SAME INSTANT and crash into each
-#     other there.  Only one traveler may be inside a node at a time, so:
+#  DESIGN
+#     7 travelers start on 7 DIFFERENT nodes (1..7), each exactly 1 weight
+#     unit from the central collision node 0. All 7 reach node 0 at the
+#     same instant and must queue. Only one traveler fits in a node, so six
+#     BLOCK and the parent drains the queue in the algorithm's order.
 #
-#        - exactly ONE is let into node 0,
-#        - the other SIX are forced to BLOCK and queue
-#          (look for the  "... waiting for node 0"  lines in the output),
-#        - the parent then drains that queue one-by-one, in the order the
-#          chosen algorithm dictates.
+#  PRIORITY RULE IN THE CODE:  sched_priority[i] = K - i   (K = 7)
+#        T0 -> priority 7  (HIGHEST)   ... T6 -> priority 1 (LOWEST)
+#     Scheduler admits the HIGHEST priority waiting traveler first.
 #
-#     Because node 0 is NOT where anyone started, this proves the queue /
-#     blocking logic works in the MIDDLE of the journey, not just at t=0.
+#  PATH COSTS (node 0's out-edges are weighted to DECREASE with index, so
+#  SJF order is the REVERSE of PRIORITY order — that's the key contrast):
+#        T0 : 1->0->8    total cost 14   (priority 7, most EXPENSIVE path)
+#        T1 : 2->0->9    total cost 12
+#        T2 : 3->0->10   total cost 10
+#        T3 : 4->0->11   total cost  8
+#        T4 : 5->0->12   total cost  6
+#        T5 : 6->0->13   total cost  4
+#        T6 : 7->0->14   total cost  2   (priority 1, CHEAPEST path)
 #
-#  THE COLLISION POINT is node 0.  After node 0 each traveler peels off to
-#  its own private destination (8..14), so there is exactly one clean
-#  contention point — easy to read in the log.
+#  EXPECTED ADMISSION ORDER AT NODE 0  (read the "entered node 0" lines):
+#        PRIORITY ->  T0, T1, T2, T3, T4, T5, T6   (highest priority first)
+#        SJF      ->  T6, T5, T4, T3, T2, T1, T0   (cheapest path first = REVERSE)
+#        FCFS     ->  arrival order (roughly T0..T6, whoever's write lands first)
 #
-#  MAP  (traveler : start -> 0 -> dest : total path cost):
-#        T0 : 1 -> 0 -> 8    cost 14   (longest  path)
-#        T1 : 2 -> 0 -> 9    cost 12
-#        T2 : 3 -> 0 -> 10   cost 10
-#        T3 : 4 -> 0 -> 11   cost  8
-#        T4 : 5 -> 0 -> 12   cost  6
-#        T5 : 6 -> 0 -> 13   cost  4
-#        T6 : 7 -> 0 -> 14   cost  2   (shortest path)
-#
-#  EXPECTED ADMISSION ORDER AT NODE 0
-#        FCFS -> arrival order :  T0, T1, T2, T3, T4, T5, T6
-#                (they line up in the order they reach node 0)
-#        SJF  -> cheapest first:  T6, T5, T4, T3, T2, T1, T0
-#                (the reverse — shortest total path jumps the queue)
-#
-#     Run both and compare the "entered node 0" lines: same race, opposite
-#     service order.  In BOTH runs node 0 is never occupied by two
-#     travelers at once — that is the mutual exclusion holding under load.
+#  THE PROOF: PRIORITY and SJF produce OPPOSITE orders on the same graph.
+#  If your priority run shows T0 entering node 0 first (and SJF shows T6
+#  first), the priority policy is working correctly.
 # ════════════════════════════════════════════════════════════════════
 
-# graph:  15 nodes, 14 directed edges
+# graph: 15 nodes, 14 directed edges
 15 14
 
-# ── every start node is exactly 1 weight-unit from the collision node 0 ──
+# every start node is exactly 1 weight-unit from collision node 0
 1 0 1
 2 0 1
 3 0 1
@@ -58,7 +49,8 @@
 6 0 1
 7 0 1
 
-# ── node 0 fans out to the 7 destinations (distinct weights = distinct cost) ──
+# node 0 fans out; weights DECREASE with index so total cost decreases
+# with index (T0 most expensive, T6 cheapest) -> SJF reverses priority
 0 8  13
 0 9  11
 0 10 9
