@@ -1,20 +1,3 @@
-/*
- * scheduler.c — Milestone 7: FCFS + SJF scheduling (the core of the mission).
- *
- * Two parts live here:
- *   1. The scheduling policy — one waiting queue per node. Only one traveler
- *      may be inside a node at a time.
- *        FCFS = join the queue at the back, get let in from the front.
- *        SJF  = join the queue, the traveler with the shortest total path
- *               cost is let in first.
- *   2. The simulation that uses it — the parent forks one child per traveler,
- *      every child asks before entering a node and BLOCKS until the parent
- *      wakes it, and the parent grants access in the chosen order.
- *
- * The parent records a timeline of events (wait / enter / leave / finish) so
- * the GUI in gui_m4.c can replay the run afterwards.
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -37,6 +20,7 @@ static int qlen[MAX_NODES];                     /* how many are waiting      */
 
 static SchedAlgo current_algo;                  /* which policy is active    */
 static int       path_cost[MAX_TRAVELERS];      /* total Dijkstra cost per traveler (SJF) */
+static pid_t     traveler_pid[MAX_TRAVELERS];   /* child PID per traveler (LPID) */
 
 static void sched_init(int num_nodes, SchedAlgo algo, const int costs[], int K)
 {
@@ -72,6 +56,13 @@ static int sched_try_admit(int node)
         /* scan for the traveler with the lowest path cost */
         for (int i = 1; i < qlen[node]; i++) {
             if (path_cost[queue[node][i]] < path_cost[queue[node][pick]])
+                pick = i;
+        }
+    }
+    else if (current_algo == SCHED_LPID) {
+        /* scan for the traveler with the lowest PID */
+        for (int i = 1; i < qlen[node]; i++) {
+            if (traveler_pid[queue[node][i]] < traveler_pid[queue[node][pick]])
                 pick = i;
         }
     }
@@ -176,7 +167,8 @@ static void admit_and_wake(int node, int grant_wfd[], int next_of[],
 SimEvent* run_scheduled_sim(Graph* g, Traveler* tr, int K, int* outN,
                             SchedAlgo algo)
 {
-    const char* tag = (algo == SCHED_SJF) ? "SJF" : "FCFS";
+    const char* tag = (algo == SCHED_SJF)  ? "SJF"  :
+                      (algo == SCHED_LPID) ? "LPID" : "FCFS";
 
     /* ── pre-compute each traveler's total path cost (needed for SJF) ── */
     int costs[MAX_TRAVELERS];
@@ -249,6 +241,7 @@ SimEvent* run_scheduled_sim(Graph* g, Traveler* tr, int K, int* outN,
 
             if (msg.type == REQ_ENTER) {
                 next_of[msg.traveler] = msg.next;
+                traveler_pid[msg.traveler] = msg.pid;   /* needed by SCHED_LPID */
                 printf("[%s] T%d (pid=%d) waiting for node %d\n",
                        tag, msg.traveler, (int)msg.pid, msg.node);
                 ev[n++] = (SimEvent){ t, msg.traveler, EV_WAIT, msg.node, msg.next };

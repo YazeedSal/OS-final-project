@@ -53,8 +53,9 @@ int main(int argc, char* argv[])
     SchedAlgo sched;
     if (strcmp(algo, "fcfs") == 0)      sched = SCHED_FCFS;
     else if (strcmp(algo, "sjf") == 0)  sched = SCHED_SJF;
+    else if (strcmp(algo, "priority") == 0) sched = SCHED_LPID;
     else {
-        fprintf(stderr, "Error: unknown algorithm '%s' (use 'fcfs' or 'sjf').\n", algo);
+        fprintf(stderr, "Error: unknown algorithm '%s' (use 'fcfs', 'sjf', or 'priority').\n", algo);
         return 1;
     }
 
@@ -74,7 +75,8 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    const char* algoName = (sched == SCHED_SJF) ? "SJF" : "FCFS";
+    const char* algoName = (sched == SCHED_SJF)  ? "SJF"  :
+                          (sched == SCHED_LPID) ? "LPID" : "FCFS";
     printf("Scheduler: %s  |  nodes: %d  edges: %d  travelers: %d\n",
            algoName, g.numNodes, g.numEdges, K);
 
