@@ -24,7 +24,7 @@
  * queue — nothing else moves.
  */
 
-typedef enum { SCHED_FCFS, SCHED_SJF } SchedAlgo;
+typedef enum { SCHED_FCFS, SCHED_SJF, SCHED_PRIORITY } SchedAlgo;
 
 /* ───── message a child sends to the parent through the request pipe ───── */
 enum { REQ_ENTER, REQ_LEAVE, REQ_FINISH };

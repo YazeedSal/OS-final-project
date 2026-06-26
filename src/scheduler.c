@@ -34,15 +34,20 @@
 static int occupant[MAX_NODES];                 /* traveler inside, or -1    */
 static int queue[MAX_NODES][MAX_TRAVELERS];     /* waiting travelers         */
 static int qlen[MAX_NODES];                     /* how many are waiting      */
+static pid_t traveler_pid[MAX_TRAVELERS];   /* PID per traveler (PRIORITY) */
 
 static SchedAlgo current_algo;                  /* which policy is active    */
 static int       path_cost[MAX_TRAVELERS];      /* total Dijkstra cost per traveler (SJF) */
 
-static void sched_init(int num_nodes, SchedAlgo algo, const int costs[], int K)
+static void sched_init(int num_nodes, SchedAlgo algo, const int costs[],
+                       const pid_t pids[], int K)
 {
     current_algo = algo;
-    for (int i = 0; i < K && i < MAX_TRAVELERS; i++)
-        path_cost[i] = costs ? costs[i] : 0;
+    for (int i = 0; i < K && i < MAX_TRAVELERS; i++) {
+        path_cost[i]    = costs ? costs[i] : 0;
+        traveler_pid[i] = pids  ? pids[i]  : 0;
+    }
+
     for (int i = 0; i < num_nodes; i++) {
         occupant[i] = -1;
         qlen[i]     = 0;
@@ -68,10 +73,17 @@ static int sched_try_admit(int node)
 
     int pick = 0;                          /* index inside queue[node][] */
 
-    if (current_algo == SCHED_SJF) {
+  if (current_algo == SCHED_SJF) {
         /* scan for the traveler with the lowest path cost */
         for (int i = 1; i < qlen[node]; i++) {
             if (path_cost[queue[node][i]] < path_cost[queue[node][pick]])
+                pick = i;
+        }
+    }
+    else if (current_algo == SCHED_PRIORITY) {
+        /* scan for the traveler with the lowest PID */
+        for (int i = 1; i < qlen[node]; i++) {
+            if (traveler_pid[queue[node][i]] < traveler_pid[queue[node][pick]])
                 pick = i;
         }
     }
@@ -229,7 +241,7 @@ SimEvent* run_scheduled_sim(Graph* g, Traveler* tr, int K, int* outN,
     int next_of[MAX_TRAVELERS];           /* 'next' from each child's ENTER */
     for (int i = 0; i < K; i++) next_of[i] = -1;
 
-    sched_init(g->numNodes, algo, costs, K);
+    sched_init(g->numNodes, algo, costs,pid, K);
 
     struct timespec start;
     clock_gettime(CLOCK_MONOTONIC, &start);
